@@ -15,6 +15,7 @@ from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torchvision import datasets, models, transforms
 import torchvision
+from tensorboardX import SummaryWriter
 
 import model
 from anchors import Anchors
@@ -42,8 +43,20 @@ def main(args=None):
 
 	parser.add_argument('--depth', help='Resnet depth, must be one of 18, 34, 50, 101, 152', type=int, default=50)
 	parser.add_argument('--epochs', help='Number of epochs', type=int, default=100)
+	parser.add_argument('--title', type=str, default='')
+	parser.add_argument("--resume_model", type=str, default="")
+	parser.add_argument("--resume_epoch", type=int, default=0)
 
 	parser = parser.parse_args(args)
+
+	log_dir = "./runs/" + parser.title
+	writer = SummaryWriter(log_dir)
+
+	if not os.path.isdir(log_dir + "/checkpoints"):
+		os.makedirs(log_dir + "/checkpoints")
+
+	if not os.path.isdir(log_dir + '/map_files'):
+		os.makedirs(log_dir + '/map_files')
 
 	# Create the data loaders
 	if parser.dataset == 'coco':
@@ -75,11 +88,11 @@ def main(args=None):
 		raise ValueError('Dataset type not understood (must be csv or coco), exiting.')
 
 	sampler = AspectRatioBasedSampler(dataset_train, batch_size=2, drop_last=False)
-	dataloader_train = DataLoader(dataset_train, num_workers=3, collate_fn=collater, batch_sampler=sampler)
+	dataloader_train = DataLoader(dataset_train, num_workers=0, collate_fn=collater, batch_sampler=sampler)
 
 	if dataset_val is not None:
 		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=1, drop_last=False)
-		dataloader_val = DataLoader(dataset_val, num_workers=3, collate_fn=collater, batch_sampler=sampler_val)
+		dataloader_val = DataLoader(dataset_val, num_workers=0, collate_fn=collater, batch_sampler=sampler_val)
 
 	# Create the model
 	if parser.depth == 18:
@@ -95,12 +108,16 @@ def main(args=None):
 	else:
 		raise ValueError('Unsupported model depth, must be one of 18, 34, 50, 101, 152')		
 
+
+	if parser.resume_model:
+		retinanet.load_state_dict(torch.load(parser.resume_model))
+
 	use_gpu = True
 
 	if use_gpu:
 		retinanet = retinanet.cuda()
 	
-	retinanet = torch.nn.DataParallel(retinanet).cuda()
+	#retinanet = torch.nn.DataParallel(retinanet).cuda()
 
 	retinanet.training = True
 
@@ -111,28 +128,44 @@ def main(args=None):
 	loss_hist = collections.deque(maxlen=500)
 
 	retinanet.train()
-	retinanet.module.freeze_bn()
+	retinanet.freeze_bn()
 
 	print('Num training images: {}'.format(len(dataset_train)))
 
-	for epoch_num in range(parser.epochs):
+	for epoch_num in range(parser.resume_epoch, parser.epochs):
 
 		retinanet.train()
-		retinanet.module.freeze_bn()
+		retinanet.freeze_bn()
 		
 		epoch_loss = []
-		
+		i = 0
+		avg_class_loss = 0.0
+		avg_reg_loss = 0.0
+
 		for iter_num, data in enumerate(dataloader_train):
+			i += 1
+
 			try:
 				optimizer.zero_grad()
 
-				classification_loss, regression_loss = retinanet([data['img'].cuda().float(), data['annot']])
+				classification_loss, regression_loss = retinanet([data['img'].cuda().float(), data['annot'].cuda().float()])
 
 				classification_loss = classification_loss.mean()
 				regression_loss = regression_loss.mean()
 
+				avg_class_loss += classification_loss
+				avg_reg_loss += regression_loss
+
+				if i % 100 == 0:
+					writer.add_scalar("train/classification_loss", avg_class_loss / 100,
+									  epoch_num * (len(dataloader_train)) + i)
+					writer.add_scalar("train/regression_loss", avg_reg_loss / 100,
+									  epoch_num * (len(dataloader_train)) + i)
+					avg_class_loss = 0.0
+					avg_reg_loss = 0.0
+
 				loss = classification_loss + regression_loss
-				
+
 				if bool(loss == 0):
 					continue
 
@@ -147,7 +180,7 @@ def main(args=None):
 				epoch_loss.append(float(loss))
 
 				print('Epoch: {} | Iteration: {} | Classification loss: {:1.5f} | Regression loss: {:1.5f} | Running loss: {:1.5f}'.format(epoch_num, iter_num, float(classification_loss), float(regression_loss), np.mean(loss_hist)))
-				
+
 				del classification_loss
 				del regression_loss
 			except Exception as e:
@@ -164,16 +197,28 @@ def main(args=None):
 
 			print('Evaluating dataset')
 
-			mAP = csv_eval.evaluate(dataset_val, retinanet)
+			mAP, AP_string = csv_eval.evaluate(dataset_val, retinanet, score_threshold=0.15)
+			with open(log_dir + '/map_files/{}_retinanet_{}.txt'.format(parser.dataset, epoch_num), 'w') as f:
+				f.write(AP_string)
+			total = 0.0
+			all = 0.0
+			total_unweighted = 0.0
+			for c in mAP:
+				total += mAP[c][0]*mAP[c][1]
+				total_unweighted += mAP[c][0]
+				all += mAP[c][1]
+			writer.add_scalar("val/mAP", total/all, epoch_num)
+			writer.add_scalar("val/mAP_unweighted", total_unweighted / len(mAP), epoch_num)
 
 		
 		scheduler.step(np.mean(epoch_loss))	
 
-		torch.save(retinanet.module, '{}_retinanet_{}.pt'.format(parser.dataset, epoch_num))
+
+		torch.save(retinanet.state_dict(), log_dir + '/checkpoints/{}_retinanet_{}.pth'.format(parser.dataset, epoch_num))
 
 	retinanet.eval()
 
-	torch.save(retinanet, 'model_final.pt'.format(epoch_num))
+	torch.save(retinanet.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
 
 if __name__ == '__main__':
  main()

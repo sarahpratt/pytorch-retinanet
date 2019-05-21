@@ -3,6 +3,7 @@ from __future__ import print_function
 import numpy as np
 import json
 import os
+import pdb
 
 import torch
 
@@ -230,9 +231,11 @@ def evaluate(
         average_precisions[label] = average_precision, num_annotations
     
     print('\nmAP:')
+    output_str = ''
     for label in range(generator.num_classes()):
         label_name = generator.label_to_name(label)
         print('{}: {}'.format(label_name, average_precisions[label][0]))
+        output_str += str(label_name) + ' , ' + str(average_precisions[label][0]) + '\n'
     
-    return average_precisions
+    return average_precisions, output_str
 

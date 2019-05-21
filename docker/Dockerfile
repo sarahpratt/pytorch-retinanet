@@ -4,6 +4,8 @@ RUN pip install opencv-python cffi pandas cython requests matplotlib==2.2.2
 RUN pip install pycocotools 
 RUN pip install torch==0.4.1
 RUN pip install torchvision==0.2.1
+RUN pip install tensorflow
+RUN pip install tensorboardx
 COPY install_nvidia.sh /root/install_nvidia.sh
 RUN /root/install_nvidia.sh
 CMD /bin/bash
