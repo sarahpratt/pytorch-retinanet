@@ -7,10 +7,12 @@ from utils import BasicBlock, Bottleneck, BBoxTransform, ClipBoxes
 from anchors import Anchors
 import losses
 from lib.nms.pth_nms import pth_nms
+import pdb
 
 def nms(dets, thresh):
     "Dispatch to either CPU or GPU NMS implementations.\
     Accept dets as tensor"""
+
     return pth_nms(dets, thresh)
 
 model_urls = {
@@ -231,7 +233,7 @@ class ResNet(nn.Module):
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
 
-    def forward(self, inputs):
+    def forward(self, inputs, return_all_scores=False):
 
         if self.training:
             img_batch, annotations = inputs
@@ -266,6 +268,11 @@ class ResNet(nn.Module):
 
             scores_over_thresh = (scores>0.05)[0, :, 0]
 
+            if scores_over_thresh.sum() == 0 and return_all_scores:
+                # no boxes to NMS, just return
+                return [torch.zeros(0), torch.zeros(0, 4)]
+
+
             if scores_over_thresh.sum() == 0:
                 # no boxes to NMS, just return
                 return [torch.zeros(0), torch.zeros(0), torch.zeros(0, 4)]
@@ -274,11 +281,21 @@ class ResNet(nn.Module):
             transformed_anchors = transformed_anchors[:, scores_over_thresh, :]
             scores = scores[:, scores_over_thresh, :]
 
+            transformed_anchors = transformed_anchors.cuda()
+
             anchors_nms_idx = nms(torch.cat([transformed_anchors, scores], dim=2)[0, :, :], 0.5)
 
-            nms_scores, nms_class = classification[0, anchors_nms_idx, :].max(dim=1)
+            nms_scores, nms_class = classification[0, anchors_nms_idx, :].topk(3, dim=1)
 
-            return [nms_scores, nms_class, transformed_anchors[0, anchors_nms_idx, :]]
+            if return_all_scores:
+                return [classification[0, anchors_nms_idx, :], transformed_anchors[0, anchors_nms_idx, :]]
+
+            nms_scores = torch.cat((nms_scores[:, 0], nms_scores[:, 1], nms_scores[:,2]))
+            nms_class = torch.cat((nms_class[:, 0], nms_class[:, 1], nms_class[:,2]))
+            x = transformed_anchors[0, anchors_nms_idx, :]
+            boxes = torch.cat((x, x, x))
+
+            return [nms_scores, nms_class, boxes]
 
 
 

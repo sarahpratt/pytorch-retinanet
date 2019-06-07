@@ -17,6 +17,7 @@ from torchvision import datasets, models, transforms
 import torchvision
 from tensorboardX import SummaryWriter
 
+import math
 import model
 from anchors import Anchors
 import losses
@@ -46,11 +47,20 @@ def main(args=None):
 	parser.add_argument('--title', type=str, default='')
 	parser.add_argument("--resume_model", type=str, default="")
 	parser.add_argument("--resume_epoch", type=int, default=0)
+	parser.add_argument("--reinit-classifier", action="store_true", default=False)
+	parser.add_argument("--lr", type=float, default=.00001)
 
 	parser = parser.parse_args(args)
 
 	log_dir = "./runs/" + parser.title
 	writer = SummaryWriter(log_dir)
+
+	#pdb.set_trace()
+
+	with open(log_dir + '/config.csv', 'w') as f:
+		for item in vars(parser):
+			print(item + ',' + str(getattr(parser, item)))
+			f.write(item + ',' + str(getattr(parser, item)) + '\n')
 
 	if not os.path.isdir(log_dir + "/checkpoints"):
 		os.makedirs(log_dir + "/checkpoints")
@@ -87,8 +97,8 @@ def main(args=None):
 	else:
 		raise ValueError('Dataset type not understood (must be csv or coco), exiting.')
 
-	sampler = AspectRatioBasedSampler(dataset_train, batch_size=2, drop_last=False)
-	dataloader_train = DataLoader(dataset_train, num_workers=0, collate_fn=collater, batch_sampler=sampler)
+	sampler = AspectRatioBasedSampler(dataset_train, batch_size=8, drop_last=False)
+	dataloader_train = DataLoader(dataset_train, num_workers=8, collate_fn=collater, batch_sampler=sampler)
 
 	if dataset_val is not None:
 		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=1, drop_last=False)
@@ -106,36 +116,44 @@ def main(args=None):
 	elif parser.depth == 152:
 		retinanet = model.resnet152(num_classes=dataset_train.num_classes(), pretrained=True)
 	else:
-		raise ValueError('Unsupported model depth, must be one of 18, 34, 50, 101, 152')		
-
+		raise ValueError('Unsupported model depth, must be one of 18, 34, 50, 101, 152')
 
 	if parser.resume_model:
-		retinanet.load_state_dict(torch.load(parser.resume_model))
+		x = torch.load(parser.resume_model)
+		if parser.reinit_classifier:
+			dummy = nn.Conv2d(256, 9*dataset_train.num_classes(), kernel_size=3, padding=1)
+			x['classificationModel.output.weight'] = dummy.weight.clone()
+			x['classificationModel.output.bias'] = dummy.bias.clone()
+			prior = 0.01
+			x['classificationModel.output.weight'].data.fill_(0)
+			x['classificationModel.output.bias'].data.fill_(-math.log((1.0 - prior) / prior))
+		retinanet.load_state_dict(x)
 
 	use_gpu = True
 
 	if use_gpu:
 		retinanet = retinanet.cuda()
 	
-	#retinanet = torch.nn.DataParallel(retinanet).cuda()
+	retinanet = torch.nn.DataParallel(retinanet).cuda()
+	#torch.nn.DataParallel(retinanet).cuda()
 
 	retinanet.training = True
 
-	optimizer = optim.Adam(retinanet.parameters(), lr=1e-5)
+	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
 
 	scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
 
 	loss_hist = collections.deque(maxlen=500)
 
 	retinanet.train()
-	retinanet.freeze_bn()
+	retinanet.module.freeze_bn()
 
 	print('Num training images: {}'.format(len(dataset_train)))
 
 	for epoch_num in range(parser.resume_epoch, parser.epochs):
 
 		retinanet.train()
-		retinanet.freeze_bn()
+		retinanet.module.freeze_bn()
 		
 		epoch_loss = []
 		i = 0
@@ -147,6 +165,11 @@ def main(args=None):
 
 			try:
 				optimizer.zero_grad()
+
+				#pdb.set_trace()
+
+				shape = data['img'].shape[2] * data['img'].shape[3]
+				writer.add_scalar("train/image_shape", shape, epoch_num * (len(dataloader_train)) + i)
 
 				classification_loss, regression_loss = retinanet([data['img'].cuda().float(), data['annot'].cuda().float()])
 
@@ -187,17 +210,12 @@ def main(args=None):
 				print(e)
 				continue
 
-		if parser.dataset == 'coco':
+		if epoch_num%2 == 0:
 
 			print('Evaluating dataset')
 
-			coco_eval.evaluate_coco(dataset_val, retinanet)
-
-		elif parser.dataset == 'csv' and parser.csv_val is not None:
-
-			print('Evaluating dataset')
-
-			mAP, AP_string = csv_eval.evaluate(dataset_val, retinanet, score_threshold=0.15)
+			retinanet.eval()
+			mAP, AP_string = csv_eval.evaluate(dataset_val, retinanet.module, score_threshold=0.1)
 			with open(log_dir + '/map_files/{}_retinanet_{}.txt'.format(parser.dataset, epoch_num), 'w') as f:
 				f.write(AP_string)
 			total = 0.0
@@ -210,15 +228,15 @@ def main(args=None):
 			writer.add_scalar("val/mAP", total/all, epoch_num)
 			writer.add_scalar("val/mAP_unweighted", total_unweighted / len(mAP), epoch_num)
 
-		
-		scheduler.step(np.mean(epoch_loss))	
+
+		scheduler.step(np.mean(epoch_loss))
 
 
-		torch.save(retinanet.state_dict(), log_dir + '/checkpoints/{}_retinanet_{}.pth'.format(parser.dataset, epoch_num))
+		torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/{}_retinanet_{}.pth'.format(parser.dataset, epoch_num))
 
 	retinanet.eval()
 
-	torch.save(retinanet.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
+	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
 
 if __name__ == '__main__':
  main()

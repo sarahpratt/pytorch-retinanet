@@ -87,7 +87,11 @@ def _get_detections(dataset, retinanet, score_threshold=0.05, max_detections=100
             scale = data['scale']
 
             # run network
+            #print(data['img'].permute(2, 0, 1).cuda().float().unsqueeze(dim=0).is_cuda)
+            #pdb.set_trace()
             scores, labels, boxes = retinanet(data['img'].permute(2, 0, 1).cuda().float().unsqueeze(dim=0))
+            #scores, labels, boxes = retinanet(data['img'].cuda().float())
+
             scores = scores.cpu().numpy()
             labels = labels.cpu().numpy()
             boxes  = boxes.cpu().numpy()
@@ -140,7 +144,17 @@ def _get_annotations(generator):
 
         # copy detections to all_annotations
         for label in range(generator.num_classes()):
-            all_annotations[i][label] = annotations[annotations[:, 4] == label, :4].copy()
+            anns = []
+            unique_label = set()
+            unique_label.add(annotations[:, 4][0])
+            unique_label.add(annotations[:, 5][0])
+            unique_label.add(annotations[:, 6][0])
+            for l in list(unique_label):
+                if len(annotations[l == label, :, :4]):
+                    for ann in annotations[l == label, :, :4].copy()[0]:
+                        anns.append(ann)
+            #pdb.set_trace()
+            all_annotations[i][label] = torch.Tensor(anns)
 
         print('{}/{}'.format(i + 1, len(generator)), end='\r')
 
@@ -170,9 +184,8 @@ def evaluate(
 
 
     # gather all detections and annotations
-
-    all_detections     = _get_detections(generator, retinanet, score_threshold=score_threshold, max_detections=max_detections, save_path=save_path)
     all_annotations    = _get_annotations(generator)
+    all_detections     = _get_detections(generator, retinanet, score_threshold=score_threshold, max_detections=max_detections, save_path=save_path)
 
     average_precisions = {}
 

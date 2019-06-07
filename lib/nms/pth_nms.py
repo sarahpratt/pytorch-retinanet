@@ -1,12 +1,14 @@
 import torch
 from ._ext import nms
 import numpy as np
+import pdb
 
 def pth_nms(dets, thresh):
   """
   dets has to be a tensor
   """
-  if not dets.is_cuda:
+  if not dets.is_cuda or True:
+    dets = dets.cpu()
     x1 = dets[:, 0]
     y1 = dets[:, 1]
     x2 = dets[:, 2]
@@ -39,7 +41,9 @@ def pth_nms(dets, thresh):
     num_out = torch.LongTensor(1)
     # keep = torch.cuda.LongTensor(dets.size(0))
     # num_out = torch.cuda.LongTensor(1)
+    pdb.set_trace()
     nms.gpu_nms(keep, num_out, dets, thresh)
+
 
     return order[keep[:num_out[0]].cuda()].contiguous()
     # return order[keep[:num_out[0]]].contiguous()

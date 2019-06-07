@@ -236,7 +236,7 @@ class CSVDataset(Dataset):
     def load_annotations(self, image_index):
         # get ground truth annotations
         annotation_list = self.image_data[self.image_names[image_index]]
-        annotations     = np.zeros((0, 5))
+        annotations     = np.zeros((0, 7))
 
         # some images appear to miss annotations (like image with id 257034)
         if len(annotation_list) == 0:
@@ -253,14 +253,17 @@ class CSVDataset(Dataset):
             if (x2-x1) < 1 or (y2-y1) < 1:
                 continue
 
-            annotation        = np.zeros((1, 5))
+            #annotation = np.zeros((1, 5))
+            annotation        = np.zeros((1, 7)) #allow for 3 annotations
             
             annotation[0, 0] = x1
             annotation[0, 1] = y1
             annotation[0, 2] = x2
             annotation[0, 3] = y2
 
-            annotation[0, 4]  = self.name_to_label(a['class'])
+            annotation[0, 4]  = self.name_to_label(a['class1'])
+            annotation[0, 5] = self.name_to_label(a['class2'])
+            annotation[0, 6] = self.name_to_label(a['class3'])
             annotations       = np.append(annotations, annotation, axis=0)
 
         return annotations
@@ -271,7 +274,7 @@ class CSVDataset(Dataset):
             line += 1
 
             try:
-                img_file, x1, y1, x2, y2, class_name = row[:6]
+                img_file, x1, y1, x2, y2, class1, class2, class3 = row[:8]
             except ValueError:
                 print('line {}: format should be \'img_file,x1,y1,x2,y2,class_name\' or \'img_file,,,,,\''.format(line))
                 #raise_from(ValueError('line {}: format should be \'img_file,x1,y1,x2,y2,class_name\' or \'img_file,,,,,\''.format(line)), None)
@@ -281,7 +284,7 @@ class CSVDataset(Dataset):
                 result[img_file] = []
 
             # If a row contains only an image path, it's an image without annotations.
-            if (x1, y1, x2, y2, class_name) == ('', '', '', '', ''):
+            if (x1, y1, x2, y2, class1, class2, class3) == ('', '', '', '', '', '', ''):
                 continue
 
             x1 = self._parse(x1, int, 'line {}: malformed x1: {{}}'.format(line))
@@ -297,10 +300,22 @@ class CSVDataset(Dataset):
                 raise ValueError('line {}: y2 ({}) must be higher than y1 ({})'.format(line, y2, y1))
 
             # check if the current class name is correctly present
-            if class_name not in classes:
-                raise ValueError('line {}: unknown class name: \'{}\' (classes: {})'.format(line, class_name, classes))
+            if class1 not in classes:
+                raise ValueError('line {}: unknown class name: \'{}\' (classes: {})'.format(line, class1, classes))
+            if class2 not in classes and class2 != 'None':
+                raise ValueError('line {}: unknown class name: \'{}\' (classes: {})'.format(line, class2, classes))
+            if class3 not in classes and class3 != 'None':
+                raise ValueError('line {}: unknown class name: \'{}\' (classes: {})'.format(line, class3, classes))
 
-            result[img_file].append({'x1': x1, 'x2': x2, 'y1': y1, 'y2': y2, 'class': class_name})
+            #set class2 and class3 equal to class1 if they are none. Class1 is guarenteed a values and each unique class
+            #is only counted once so this does not change the value
+            if class2 == 'None':
+                class2 = class1
+
+            if class3 == 'None':
+                class3 = class1
+
+            result[img_file].append({'x1': x1, 'x2': x2, 'y1': y1, 'y2': y2, 'class1': class1, 'class2': class2, 'class3': class3})
         return result
 
     def name_to_label(self, name):
@@ -341,7 +356,7 @@ def collater(data):
     
     if max_num_annots > 0:
 
-        annot_padded = torch.ones((len(annots), max_num_annots, 5)) * -1
+        annot_padded = torch.ones((len(annots), max_num_annots, 7)) * -1
 
         if max_num_annots > 0:
             for idx, annot in enumerate(annots):
@@ -349,7 +364,7 @@ def collater(data):
                 if annot.shape[0] > 0:
                     annot_padded[idx, :annot.shape[0], :] = annot
     else:
-        annot_padded = torch.ones((len(annots), 1, 5)) * -1
+        annot_padded = torch.ones((len(annots), 1, 7)) * -1
 
 
     padded_imgs = padded_imgs.permute(0, 3, 1, 2)
@@ -368,7 +383,7 @@ class Resizer(object):
     """Convert ndarrays in sample to Tensors."""
 
     def __call__(self, sample, min_side=608, max_side=1024):
-        image, annots = sample['img'], sample['annot']
+        image, annots, image_name = sample['img'], sample['annot'], sample['img_name']
 
         rows_orig, cols_orig, cns_orig = image.shape
 
@@ -401,7 +416,7 @@ class Resizer(object):
             new_image_no_norm = np.zeros((rows + pad_w, cols + pad_h, cns)).astype(np.float32)
             new_image_no_norm[:rows, :cols, :] = no_norm_image.astype(np.float32)
             return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale, 'img_name': sample['img_name'], 'no_norm': new_image_no_norm}
-        return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale, 'img_name': sample['img_name']}
+        return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale, 'img_name': image_name}
 
 
 class Augmenter(object):
@@ -410,7 +425,7 @@ class Augmenter(object):
     def __call__(self, sample, flip_x=0.5):
 
         if np.random.rand() < flip_x:
-            image, annots = sample['img'], sample['annot']
+            image, annots, img_name = sample['img'], sample['annot'], sample['img_name']
             image = image[:, ::-1, :]
 
             rows, cols, channels = image.shape
@@ -423,7 +438,7 @@ class Augmenter(object):
             annots[:, 0] = cols - x2
             annots[:, 2] = cols - x_tmp
 
-            sample = {'img': image, 'annot': annots}
+            sample = {'img': image, 'annot': annots, 'img_name': img_name}
 
         return sample
 
@@ -440,7 +455,6 @@ class Normalizer(object):
 
         if 'is_visualizing' in sample:
             return {'img': ((image.astype(np.float32) - self.mean) / self.std), 'annot': annots, 'img_name': sample['img_name'], 'no_norm': image.astype(np.float32)}
-
         return {'img':((image.astype(np.float32)-self.mean)/self.std), 'annot': annots, 'img_name': sample['img_name']}
 
 class UnNormalizer(object):

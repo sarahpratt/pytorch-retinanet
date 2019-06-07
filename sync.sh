@@ -9,4 +9,4 @@ rsync -avz \
   --exclude venv/ \
   --exclude data/coco/ \
   --exclude data/custom/images_512/ \
-   ../pytorch-retinanet sarahp@172.16.6.248:/home/sarahp
+   ../pytorch-retinanet sarahp@172.16.2.125:/home/sarahp

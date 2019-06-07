@@ -6,6 +6,7 @@ import copy
 import pdb
 import time
 import argparse
+from collections import defaultdict
 
 import sys
 import cv2
@@ -60,19 +61,21 @@ def main(args=None):
 
 	unnormalize = UnNormalizer()
 
-	def draw_caption(image, box, caption):
+	def draw_caption(image, box, caption, label_number):
 
 		b = np.array(box).astype(int)
-		cv2.putText(image, caption, (b[0], b[1] + 10), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
-		cv2.putText(image, caption, (b[0], b[1] + 10), cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
+		cv2.putText(image, caption, (b[0], b[1] + 10 * label_number), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
+		cv2.putText(image, caption, (b[0], b[1] + 10 * label_number), cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
 
 	for idx, data in enumerate(dataloader_val):
+
+		num_labels = defaultdict(int)
 
 		with torch.no_grad():
 			st = time.time()
 			scores, classification, transformed_anchors = retinanet(data['img'].cuda().float())
 			print('Elapsed time: {}'.format(time.time()-st))
-			idxs = np.where(scores>0.35)
+			idxs = np.where(scores>0.25)
 			img = np.array(255*data['no_norm'][0]).copy()
 
 			img = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_BGR2RGB)
@@ -83,9 +86,13 @@ def main(args=None):
 				y1 = int(bbox[1])
 				x2 = int(bbox[2])
 				y2 = int(bbox[3])
+				coord_tuple = (x1, y1, x2, y2)
+				num_labels[coord_tuple] += 1
 				label_name = dataset_val.labels[int(classification[idxs[0][j]])]
-				draw_caption(img, (x1, y1, x2, y2), label_name)
-				cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 0, 255), thickness=2)
+				draw_caption(img, (x1, y1, x2, y2), label_name, num_labels[coord_tuple])
+				if num_labels[coord_tuple] == 1:
+					cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 0, 255), thickness=2)
+				num_labels[coord_tuple] += 1
 				print(label_name)
 
 
