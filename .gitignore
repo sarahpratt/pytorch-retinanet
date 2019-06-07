@@ -101,6 +101,10 @@ ENV/
 
 *.zip
 *.pt
+*.pth
+*.csv
+*.txt
+*.json
 lib/nms/_ext/
 lib/nms/src/cuda/nms_kernel.cu.o
 
