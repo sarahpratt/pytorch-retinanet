@@ -21,7 +21,7 @@ import math
 import model
 from anchors import Anchors
 import losses
-from dataloader import CocoDataset, CSVDataset, collater, Resizer, AspectRatioBasedSampler, Augmenter, UnNormalizer, Normalizer
+from dataloader import CSVDataset, collater, Resizer, AspectRatioBasedSampler, Augmenter, UnNormalizer, Normalizer
 from torch.utils.data import Dataset, DataLoader
 
 import coco_eval
@@ -66,19 +66,19 @@ def main(args=None):
 	if not os.path.isdir(log_dir + '/map_files'):
 		os.makedirs(log_dir + '/map_files')
 
-	if parser.csv_train is None:
+	if parser.train_file is None:
 		raise ValueError('Must provide --train-file when training,')
 
-	if parser.csv_classes is None:
+	if parser.classes_file is None:
 		raise ValueError('Must provide --classes-file when training')
 
-	dataset_train = CSVDataset(train_file=parser.csv_train, class_list=parser.csv_classes, transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
+	dataset_train = CSVDataset(train_file=parser.train_file, class_list=parser.classes_file, transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
 
-	if parser.csv_val is None:
+	if parser.val_file is None:
 		dataset_val = None
 		print('No validation annotations provided.')
 	else:
-		dataset_val = CSVDataset(train_file=parser.csv_val, class_list=parser.csv_classes, transform=transforms.Compose([Normalizer(), Resizer()]))
+		dataset_val = CSVDataset(train_file=parser.val_file, class_list=parser.classes_file, transform=transforms.Compose([Normalizer(), Resizer()]))
 
 	sampler = AspectRatioBasedSampler(dataset_train, batch_size=8, drop_last=False)
 	dataloader_train = DataLoader(dataset_train, num_workers=8, collate_fn=collater, batch_sampler=sampler)
