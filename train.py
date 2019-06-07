@@ -36,11 +36,9 @@ def main(args=None):
 
 	parser     = argparse.ArgumentParser(description='Simple training script for training a RetinaNet network.')
 
-	parser.add_argument('--dataset', help='Dataset type, must be one of csv or coco.')
-	parser.add_argument('--coco_path', help='Path to COCO directory')
-	parser.add_argument('--csv_train', help='Path to file containing training annotations (see readme)')
-	parser.add_argument('--csv_classes', help='Path to file containing class list (see readme)')
-	parser.add_argument('--csv_val', help='Path to file containing validation annotations (optional, see readme)')
+	parser.add_argument('--train-file', help='Path to file containing training annotations (see readme)')
+	parser.add_argument('--classes-file', help='Path to file containing class list (see readme)')
+	parser.add_argument('--val-file', help='Path to file containing validation annotations (optional, see readme)')
 
 	parser.add_argument('--depth', help='Resnet depth, must be one of 18, 34, 50, 101, 152', type=int, default=50)
 	parser.add_argument('--epochs', help='Number of epochs', type=int, default=100)
@@ -68,34 +66,19 @@ def main(args=None):
 	if not os.path.isdir(log_dir + '/map_files'):
 		os.makedirs(log_dir + '/map_files')
 
-	# Create the data loaders
-	if parser.dataset == 'coco':
+	if parser.csv_train is None:
+		raise ValueError('Must provide --train-file when training,')
 
-		if parser.coco_path is None:
-			raise ValueError('Must provide --coco_path when training on COCO,')
+	if parser.csv_classes is None:
+		raise ValueError('Must provide --classes-file when training')
 
-		dataset_train = CocoDataset(parser.coco_path, set_name='train2017', transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
-		dataset_val = CocoDataset(parser.coco_path, set_name='val2017', transform=transforms.Compose([Normalizer(), Resizer()]))
+	dataset_train = CSVDataset(train_file=parser.csv_train, class_list=parser.csv_classes, transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
 
-	elif parser.dataset == 'csv':
-
-		if parser.csv_train is None:
-			raise ValueError('Must provide --csv_train when training on COCO,')
-
-		if parser.csv_classes is None:
-			raise ValueError('Must provide --csv_classes when training on COCO,')
-
-
-		dataset_train = CSVDataset(train_file=parser.csv_train, class_list=parser.csv_classes, transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
-
-		if parser.csv_val is None:
-			dataset_val = None
-			print('No validation annotations provided.')
-		else:
-			dataset_val = CSVDataset(train_file=parser.csv_val, class_list=parser.csv_classes, transform=transforms.Compose([Normalizer(), Resizer()]))
-
+	if parser.csv_val is None:
+		dataset_val = None
+		print('No validation annotations provided.')
 	else:
-		raise ValueError('Dataset type not understood (must be csv or coco), exiting.')
+		dataset_val = CSVDataset(train_file=parser.csv_val, class_list=parser.csv_classes, transform=transforms.Compose([Normalizer(), Resizer()]))
 
 	sampler = AspectRatioBasedSampler(dataset_train, batch_size=8, drop_last=False)
 	dataloader_train = DataLoader(dataset_train, num_workers=8, collate_fn=collater, batch_sampler=sampler)

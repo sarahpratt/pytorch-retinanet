@@ -8,7 +8,6 @@ import pdb
 import torch
 
 
-
 def compute_overlap(a, b):
     """
     Parameters
