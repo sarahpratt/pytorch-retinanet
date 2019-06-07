@@ -112,3 +112,4 @@ lib/nms/src/cuda/nms_kernel.cu.o
 # Mac Stuff
 .DS_Store
 .idea/
+output/
