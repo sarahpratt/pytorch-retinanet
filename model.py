@@ -131,8 +131,11 @@ class ClassificationModel(nn.Module):
         self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act4 = nn.ReLU()
 
-        self.output = nn.Conv2d(feature_size, num_anchors*num_classes, kernel_size=3, padding=1)
+        self.output = nn.Conv2d(feature_size, num_anchors, kernel_size=3, padding=1)
         self.output_act = nn.Sigmoid()
+
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(feature_size, num_classes)
 
     def forward(self, x):
 
@@ -148,17 +151,20 @@ class ClassificationModel(nn.Module):
         out = self.conv4(out)
         out = self.act4(out)
 
+        category_prediction = self.avgpool(out)
+        category_prediction = self.fc(category_prediction.squeeze())
+
         out = self.output(out)
         out = self.output_act(out)
 
-        # out is B x C x W x H, with C = n_classes + n_anchors
+        # out is B x A x W x H, with A = n_anchors
         out1 = out.permute(0, 2, 3, 1)
 
         batch_size, width, height, channels = out1.shape
 
-        out2 = out1.view(batch_size, width, height, self.num_anchors, self.num_classes)
+        out2 = out1.view(batch_size, width, height, self.num_anchors)
 
-        return out2.contiguous().view(x.shape[0], -1, self.num_classes)
+        return out2.contiguous().view(x.shape[0], -1), category_prediction.contiguous().view(x.shape[0], -1)
 
 class ResNet(nn.Module):
 
@@ -183,13 +189,9 @@ class ResNet(nn.Module):
 
         self.regressionModel = RegressionModel(256)
         self.classificationModel = ClassificationModel(256, num_classes=num_classes)
-
         self.anchors = Anchors()
-
         self.regressBoxes = BBoxTransform()
-
         self.clipBoxes = ClipBoxes()
-        
         self.focalLoss = losses.FocalLoss()
                 
         for m in self.modules():
@@ -200,6 +202,15 @@ class ResNet(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
+        # verb predictor
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(2048, 504)
+
+        self.verb_embeding = nn.Embedding(504, 512)
+        self.noun_embedding = nn.Embedding(407, 512)
+        self.rnn = nn.LSTMCell(2048 + 512, 1024)
+        self.rnn_linear = nn.Linear(1024, 256)
+
         prior = 0.01
         
         self.classificationModel.output.weight.data.fill_(0)
@@ -209,6 +220,8 @@ class ResNet(nn.Module):
         self.regressionModel.output.bias.data.fill_(0)
 
         self.freeze_bn()
+
+        self.loss_function = nn.CrossEntropyLoss()
 
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
@@ -233,13 +246,18 @@ class ResNet(nn.Module):
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
 
-    def forward(self, inputs, return_all_scores=False):
+    def forward(self, inputs, verb, return_all_scores=False):
+
+        #batch_size = inputs.shape[0]
 
         if self.training:
             img_batch, annotations = inputs
         else:
             img_batch = inputs
-            
+
+        batch_size = img_batch.shape[0]
+
+        # Extract Visual Features
         x = self.conv1(img_batch)
         x = self.bn1(x)
         x = self.relu(x)
@@ -250,17 +268,56 @@ class ResNet(nn.Module):
         x3 = self.layer3(x2)
         x4 = self.layer4(x3)
 
+        image_predict = self.avgpool(x4)
+        verb_predict = self.fc(image_predict.squeeze())
+        verb_guess = torch.argmax(verb_predict, dim=1)
+
+        #pdb.set_trace()
+
+        verb_loss = self.loss_function(verb_predict, verb)
+
+        previous_word = self.verb_embeding(verb_guess)
+
+        # Get feature pyramid
         features = self.fpn([x2, x3, x4])
-        pdb.set_trace()
 
-        regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
+        hx, cx = torch.zeros(batch_size, 1024).cuda(), torch.zeros(batch_size, 1024).cuda()
 
-        classification = torch.cat([self.classificationModel(feature) for feature in features], dim=1)
+        all_class_loss = 0
+        all_bbox_loss = 0
+        all_reg_loss = 0
 
-        anchors = self.anchors(img_batch)
+        for i in range(6):
 
+            rnn_input = torch.cat((image_predict.squeeze(), previous_word), dim=1)
+            hx, cx = self.rnn(rnn_input, (hx, cx))
+            rnn_output = self.rnn_linear(hx)
+
+            features = [feature * rnn_output.view(2, 256, 1, 1).expand(feature.shape) for feature in features]
+
+            #pdb.set_trace()
+
+            regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
+            classifications = []
+            bbox_distributions = []
+            for feature in features:
+                classication = self.classificationModel(feature)
+                bbox_distributions.append(classication[0])
+                classifications.append(classication[1].unsqueeze(2))
+
+            classification = torch.cat([c for c in classifications], dim=2)
+            boxes = torch.cat([b for b in bbox_distributions], dim=1)
+            anchors = self.anchors(img_batch)
+            anns = annotations[:, i, :].unsqueeze(1)
+
+            class_loss, bbox_loss, reg_loss = self.focalLoss(classification, regression, boxes, anchors, anns)
+            all_class_loss += class_loss
+            all_bbox_loss += bbox_loss
+            all_reg_loss += reg_loss
+
+        #pdb.set_trace()
         if self.training:
-            return self.focalLoss(classification, regression, anchors, annotations)
+            return verb_loss, all_class_loss.item()/6.0, all_bbox_loss.item()/6.0, all_reg_loss.item()/6.0
         else:
             transformed_anchors = self.regressBoxes(anchors, regression)
             transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
@@ -329,7 +386,11 @@ def resnet50(num_classes, pretrained=False, **kwargs):
     """
     model = ResNet(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet50'], model_dir='.'), strict=False)
+        state_dict = model_zoo.load_url(model_urls['resnet50'], model_dir='.')
+        x = nn.Linear(2048, 504)
+        state_dict['fc.weight'] = x.weight
+        state_dict['fc.bias'] = x.bias
+        model.load_state_dict(state_dict, strict=False)
     return model
 
 def resnet101(num_classes, pretrained=False, **kwargs):

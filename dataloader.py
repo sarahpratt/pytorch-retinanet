@@ -60,6 +60,14 @@ class CSVDataset(Dataset):
 
         self.image_names = list(self.image_data.keys())
 
+        self.verb_to_idx = {}
+        with open('verb_indices.txt') as f:
+            k = 0
+            for line in f:
+                verb = line.split('\n')[0]
+                self.verb_to_idx[verb] = k
+                k += 1
+
     def _parse(self, value, function, fmt):
         """
         Parse a string into a value, and format a nice ValueError if it fails.
@@ -112,7 +120,10 @@ class CSVDataset(Dataset):
 
         img = self.load_image(idx)
         annot = self.load_annotations(idx)
-        sample = {'img': img, 'annot': annot, 'img_name': self.image_names[idx]}
+        verb = self.image_names[idx].split('/')[2]
+        verb = verb.split('_')[0]
+        verb_idx = self.verb_to_idx[verb]
+        sample = {'img': img, 'annot': annot, 'img_name': self.image_names[idx], 'verb_idx': verb_idx}
         if self.is_visualizing:
             sample['is_visualizing'] = True
         if self.transform:
@@ -147,8 +158,8 @@ class CSVDataset(Dataset):
             y1 = a['y1']
             y2 = a['y2']
 
-            if (x2-x1) < 1 or (y2-y1) < 1:
-                continue
+            #if (x2-x1) < 1 or (y2-y1) < 1:
+            #    continue
 
             #annotation = np.zeros((1, 5))
             annotation        = np.zeros((1, 7)) #allow for 3 annotations
@@ -190,10 +201,10 @@ class CSVDataset(Dataset):
             y2 = self._parse(y2, int, 'line {}: malformed y2: {{}}'.format(line))
 
             # Check that the bounding box is valid.
-            if x2 <= x1:
+            if x2 <= x1 and x1 != -1:
                 print(row)
                 raise ValueError('line {}: x2 ({}) must be higher than x1 ({})'.format(line, x2, x1))
-            if y2 <= y1:
+            if y2 <= y1 and y1 != -1:
                 raise ValueError('line {}: y2 ({}) must be higher than y1 ({})'.format(line, y2, y1))
 
             # check if the current class name is correctly present
@@ -235,7 +246,9 @@ def collater(data):
     annots = [s['annot'] for s in data]
     scales = [s['scale'] for s in data]
     img_names = [s['img_name'] for s in data]
-        
+    verb_indices = [s['verb_idx'] for s in data]
+    verb_indices = torch.tensor(verb_indices)
+
     widths = [int(s.shape[0]) for s in imgs]
     heights = [int(s.shape[1]) for s in imgs]
     batch_size = len(imgs)
@@ -272,9 +285,9 @@ def collater(data):
             no_norm_img = no_norm_imgs[i]
             padded_imgs_no_norm[i, :int(no_norm_img.shape[0]), :int(no_norm_img.shape[1]), :] = torch.Tensor(no_norm_img)
 
-        return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales, 'img_name': img_names, 'no_norm': padded_imgs_no_norm}
+        return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales, 'img_name': img_names, 'no_norm': padded_imgs_no_norm, 'verb_idx': verb_indices}
 
-    return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales, 'img_name': img_names}
+    return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales, 'img_name': img_names, 'verb_idx': verb_indices}
 
 class Resizer(object):
     """Convert ndarrays in sample to Tensors."""
@@ -306,14 +319,14 @@ class Resizer(object):
         new_image = np.zeros((rows + pad_w, cols + pad_h, cns)).astype(np.float32)
         new_image[:rows, :cols, :] = image.astype(np.float32)
 
-        annots[:, :4] *= scale
+        annots[:, :4][annots[:, :4] > 0] *= scale
         if 'no_norm' in sample:
             no_norm_image = sample['no_norm']
             no_norm_image = skimage.transform.resize(no_norm_image, (int(round(rows_orig * scale)), int(round((cols_orig * scale)))))
             new_image_no_norm = np.zeros((rows + pad_w, cols + pad_h, cns)).astype(np.float32)
             new_image_no_norm[:rows, :cols, :] = no_norm_image.astype(np.float32)
-            return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale, 'img_name': sample['img_name'], 'no_norm': new_image_no_norm}
-        return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale, 'img_name': image_name}
+            return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale, 'img_name': sample['img_name'], 'no_norm': new_image_no_norm, 'verb_idx': sample['verb_idx']}
+        return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale, 'img_name': image_name, 'verb_idx': sample['verb_idx']}
 
 
 class Augmenter(object):
@@ -332,10 +345,10 @@ class Augmenter(object):
             
             x_tmp = x1.copy()
 
-            annots[:, 0] = cols - x2
-            annots[:, 2] = cols - x_tmp
+            annots[:, 0][annots[:, 0] > 0] = cols - x2[annots[:, 0] > 0]
+            annots[:, 2][annots[:, 2] > 0] = cols - x_tmp[annots[:, 2] > 0]
 
-            sample = {'img': image, 'annot': annots, 'img_name': img_name}
+            sample = {'img': image, 'annot': annots, 'img_name': img_name, 'verb_idx': sample['verb_idx']}
 
         return sample
 
@@ -351,8 +364,8 @@ class Normalizer(object):
         image, annots = sample['img'], sample['annot']
 
         if 'is_visualizing' in sample:
-            return {'img': ((image.astype(np.float32) - self.mean) / self.std), 'annot': annots, 'img_name': sample['img_name'], 'no_norm': image.astype(np.float32)}
-        return {'img':((image.astype(np.float32)-self.mean)/self.std), 'annot': annots, 'img_name': sample['img_name']}
+            return {'img': ((image.astype(np.float32) - self.mean) / self.std), 'annot': annots, 'img_name': sample['img_name'], 'no_norm': image.astype(np.float32), 'verb_idx': sample['verb_idx']}
+        return {'img':((image.astype(np.float32)-self.mean)/self.std), 'annot': annots, 'img_name': sample['img_name'], 'verb_idx': sample['verb_idx']}
 
 class UnNormalizer(object):
     def __init__(self, mean=None, std=None):

@@ -80,7 +80,7 @@ def main(args=None):
 	else:
 		dataset_val = CSVDataset(train_file=parser.val_file, class_list=parser.classes_file, transform=transforms.Compose([Normalizer(), Resizer()]))
 
-	sampler = AspectRatioBasedSampler(dataset_train, batch_size=8, drop_last=False)
+	sampler = AspectRatioBasedSampler(dataset_train, batch_size=2, drop_last=False)
 	dataloader_train = DataLoader(dataset_train, num_workers=8, collate_fn=collater, batch_sampler=sampler)
 
 	if dataset_val is not None:
@@ -121,11 +121,8 @@ def main(args=None):
 	#torch.nn.DataParallel(retinanet).cuda()
 
 	retinanet.training = True
-
 	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
-
 	scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
-
 	loss_hist = collections.deque(maxlen=500)
 
 	retinanet.train()
@@ -142,35 +139,44 @@ def main(args=None):
 		i = 0
 		avg_class_loss = 0.0
 		avg_reg_loss = 0.0
+		avg_bbox_loss = 0.0
+		avg_verb_loss = 0.0
 
 		for iter_num, data in enumerate(dataloader_train):
 			i += 1
 
 			try:
 				optimizer.zero_grad()
+				shape = data['img'].shape[2] * data['img'].shape[3]
+				#writer.add_scalar("train/image_shape", shape, epoch_num * (len(dataloader_train)) + i)
 
 				#pdb.set_trace()
 
-				shape = data['img'].shape[2] * data['img'].shape[3]
-				writer.add_scalar("train/image_shape", shape, epoch_num * (len(dataloader_train)) + i)
+				verb_loss, class_loss, bbox_loss, reg_loss = retinanet([data['img'].cuda().float(), data['annot'].cuda().float()], data['verb_idx'])
 
-				classification_loss, regression_loss = retinanet([data['img'].cuda().float(), data['annot'].cuda().float()])
+				#pdb.set_trace()
 
-				classification_loss = classification_loss.mean()
-				regression_loss = regression_loss.mean()
-
-				avg_class_loss += classification_loss
-				avg_reg_loss += regression_loss
+				avg_class_loss += class_loss
+				avg_reg_loss += reg_loss
+				avg_bbox_loss += bbox_loss
+				avg_verb_loss += verb_loss
 
 				if i % 100 == 0:
 					writer.add_scalar("train/classification_loss", avg_class_loss / 100,
 									  epoch_num * (len(dataloader_train)) + i)
 					writer.add_scalar("train/regression_loss", avg_reg_loss / 100,
 									  epoch_num * (len(dataloader_train)) + i)
+					writer.add_scalar("train/bbox_loss", avg_bbox_loss / 100,
+									  epoch_num * (len(dataloader_train)) + i)
+					writer.add_scalar("train/verb_loss", avg_verb_loss / 100,
+									  epoch_num * (len(dataloader_train)) + i)
+
 					avg_class_loss = 0.0
 					avg_reg_loss = 0.0
+					avg_bbox_loss = 0.0
+					avg_verb_loss = 0.0
 
-				loss = classification_loss + regression_loss
+				loss = verb_loss + class_loss + bbox_loss + reg_loss
 
 				if bool(loss == 0):
 					continue
@@ -185,10 +191,8 @@ def main(args=None):
 
 				epoch_loss.append(float(loss))
 
-				print('Epoch: {} | Iteration: {} | Classification loss: {:1.5f} | Regression loss: {:1.5f} | Running loss: {:1.5f}'.format(epoch_num, iter_num, float(classification_loss), float(regression_loss), np.mean(loss_hist)))
+				print('Epoch: {} | Iteration: {} | Classification loss: {:1.5f} | Regression loss: {:1.5f}'.format(epoch_num, iter_num, float(class_loss), float(reg_loss)))
 
-				del classification_loss
-				del regression_loss
 			except Exception as e:
 				print(e)
 				continue
