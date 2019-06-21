@@ -39,7 +39,7 @@ class CSVDataset(Dataset):
         # parse the provided class file
         try:
             with open(self.class_list, 'r') as file:
-                self.classes = self.load_classes(csv.reader(file, delimiter=','))
+                self.classes, self.idx_to_class = self.load_classes(csv.reader(file, delimiter=','))
         except ValueError as e:
             #raise_from(ValueError('invalid CSV class file: {}: {}'.format(self.class_list, e)), None)
             ValueError('invalid CSV class file: {}: {}'.format(self.class_list, e))
@@ -61,10 +61,12 @@ class CSVDataset(Dataset):
         self.image_names = list(self.image_data.keys())
 
         self.verb_to_idx = {}
+        self.idx_to_verb = []
         with open('verb_indices.txt') as f:
             k = 0
             for line in f:
                 verb = line.split('\n')[0]
+                self.idx_to_verb.append(verb)
                 self.verb_to_idx[verb] = k
                 k += 1
 
@@ -95,6 +97,7 @@ class CSVDataset(Dataset):
 
     def load_classes(self, csv_reader):
         result = {}
+        idx_to_result = []
 
         for line, row in enumerate(csv_reader):
             line += 1
@@ -109,7 +112,8 @@ class CSVDataset(Dataset):
             if class_name in result:
                 raise ValueError('line {}: duplicate class name: \'{}\''.format(line, class_name))
             result[class_name] = class_id
-        return result
+            idx_to_result.append(class_name.split('_')[0])
+        return result, idx_to_result
 
 
     def __len__(self):

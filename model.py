@@ -193,6 +193,7 @@ class ResNet(nn.Module):
         self.regressBoxes = BBoxTransform()
         self.clipBoxes = ClipBoxes()
         self.focalLoss = losses.FocalLoss()
+        self.regLoss = losses.RegressionLoss()
                 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -207,8 +208,8 @@ class ResNet(nn.Module):
         self.fc = nn.Linear(2048, 504)
 
         self.verb_embeding = nn.Embedding(504, 512)
-        self.noun_embedding = nn.Embedding(407, 512)
-        self.rnn = nn.LSTMCell(2048 + 512, 1024)
+        self.noun_embedding = nn.Embedding(410, 512)
+        self.rnn = nn.LSTMCell(2048 + 512 + 4, 1024)
         self.rnn_linear = nn.Linear(1024, 256)
 
         prior = 0.01
@@ -220,8 +221,8 @@ class ResNet(nn.Module):
         self.regressionModel.output.bias.data.fill_(0)
 
         self.freeze_bn()
-
         self.loss_function = nn.CrossEntropyLoss()
+        self.all_box_regression = False
 
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
@@ -246,16 +247,19 @@ class ResNet(nn.Module):
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
 
-    def forward(self, inputs, verb, return_all_scores=False):
+    def forward(self, inputs, return_all_scores=False):
 
         #batch_size = inputs.shape[0]
 
         if self.training:
-            img_batch, annotations = inputs
+            img_batch, annotations, verb = inputs
         else:
-            img_batch = inputs
+            img_batch, verb = inputs
+
+        #pdb.set_trace()
 
         batch_size = img_batch.shape[0]
+        #print(batch_size)
 
         # Extract Visual Features
         x = self.conv1(img_batch)
@@ -282,22 +286,31 @@ class ResNet(nn.Module):
         features = self.fpn([x2, x3, x4])
 
         hx, cx = torch.zeros(batch_size, 1024).cuda(), torch.zeros(batch_size, 1024).cuda()
+        previous_box = torch.zeros(batch_size, 4).cuda()
 
         all_class_loss = 0
         all_bbox_loss = 0
         all_reg_loss = 0
 
-        for i in range(6):
+        anchors = self.anchors(img_batch)
 
-            rnn_input = torch.cat((image_predict.squeeze(), previous_word), dim=1)
+        if self.all_box_regression:
+            regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
+            regression_loss = self.regLoss(regression, anchors, annotations)
+
+        if not self.training:
+            noun_predicts = []
+            bbox_predicts = []
+
+        for i in range(6):
+            rnn_input = torch.cat((image_predict.squeeze(), previous_word, previous_box), dim=1)
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
 
-            features = [feature * rnn_output.view(2, 256, 1, 1).expand(feature.shape) for feature in features]
+            features = [feature * rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
 
-            #pdb.set_trace()
-
-            regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
+            if not self.all_box_regression:
+                regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
             classifications = []
             bbox_distributions = []
             for feature in features:
@@ -306,54 +319,42 @@ class ResNet(nn.Module):
                 classifications.append(classication[1].unsqueeze(2))
 
             classification = torch.cat([c for c in classifications], dim=2)
+            classification = classification.mean(dim=2)
+            classification_guess = torch.argmax(classification, dim=1)
+            previous_word = self.noun_embedding(classification_guess)
+
             boxes = torch.cat([b for b in bbox_distributions], dim=1)
-            anchors = self.anchors(img_batch)
-            anns = annotations[:, i, :].unsqueeze(1)
+            best_bbox = torch.argmax(boxes, dim=1)
+            previous_box = regression[torch.arange(batch_size), best_bbox.view(-1), :]
 
-            class_loss, bbox_loss, reg_loss = self.focalLoss(classification, regression, boxes, anchors, anns)
-            all_class_loss += class_loss
-            all_bbox_loss += bbox_loss
-            all_reg_loss += reg_loss
+            if self.training:
+                anns = annotations[:, i, :].unsqueeze(1)
+                #class_loss = torch.Tensor(3).cuda()
+                #bbox_loss = torch.Tensor(3).cuda()
+                #reg_loss = torch.Tensor(3).cuda()
+                class_loss, bbox_loss, reg_loss = self.focalLoss(classification, regression, boxes, anchors, anns)
+                all_class_loss += class_loss
+                all_bbox_loss += bbox_loss
+                all_reg_loss += reg_loss
+            else:
+                noun_predicts.append(torch.argmax(classification, dim=1))
+                best_bbox = torch.argmax(boxes, dim=1)
+                bbox_predicts.append(regression[:, best_bbox, :])
 
-        #pdb.set_trace()
+
+        #.set_trace()
+
         if self.training:
-            return verb_loss, all_class_loss.item()/6.0, all_bbox_loss.item()/6.0, all_reg_loss.item()/6.0
+            if self.all_box_regression:
+                reg_loss = regression_loss
+            else:
+                reg_loss = all_reg_loss / 6.0
+            # losses = {'verb_loss': verb_loss, 'class_loss': all_class_loss.item() / 6.0,
+            #           'bbox_loss': all_bbox_loss.item() / 6.0, 'reg_loss': reg_loss}
+            return all_class_loss / 6.0, reg_loss, all_bbox_loss / 6.0, verb_loss
         else:
-            transformed_anchors = self.regressBoxes(anchors, regression)
-            transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
+            return verb_guess, noun_predicts, bbox_predicts
 
-            scores = torch.max(classification, dim=2, keepdim=True)[0]
-
-            scores_over_thresh = (scores>0.05)[0, :, 0]
-
-            if scores_over_thresh.sum() == 0 and return_all_scores:
-                # no boxes to NMS, just return
-                return [torch.zeros(0), torch.zeros(0, 4)]
-
-
-            if scores_over_thresh.sum() == 0:
-                # no boxes to NMS, just return
-                return [torch.zeros(0), torch.zeros(0), torch.zeros(0, 4)]
-
-            classification = classification[:, scores_over_thresh, :]
-            transformed_anchors = transformed_anchors[:, scores_over_thresh, :]
-            scores = scores[:, scores_over_thresh, :]
-
-            transformed_anchors = transformed_anchors.cuda()
-
-            anchors_nms_idx = nms(torch.cat([transformed_anchors, scores], dim=2)[0, :, :], 0.5)
-
-            nms_scores, nms_class = classification[0, anchors_nms_idx, :].topk(3, dim=1)
-
-            if return_all_scores:
-                return [classification[0, anchors_nms_idx, :], transformed_anchors[0, anchors_nms_idx, :]]
-
-            nms_scores = torch.cat((nms_scores[:, 0], nms_scores[:, 1], nms_scores[:,2]))
-            nms_class = torch.cat((nms_class[:, 0], nms_class[:, 1], nms_class[:,2]))
-            x = transformed_anchors[0, anchors_nms_idx, :]
-            boxes = torch.cat((x, x, x))
-
-            return [nms_scores, nms_class, boxes]
 
 
 
@@ -387,6 +388,7 @@ def resnet50(num_classes, pretrained=False, **kwargs):
     model = ResNet(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
         state_dict = model_zoo.load_url(model_urls['resnet50'], model_dir='.')
+        print("state dict")
         x = nn.Linear(2048, 504)
         state_dict['fc.weight'] = x.weight
         state_dict['fc.bias'] = x.bias

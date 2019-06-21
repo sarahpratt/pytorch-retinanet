@@ -5,6 +5,7 @@ import argparse
 import pdb
 import collections
 import sys
+import json
 
 import numpy as np
 
@@ -23,6 +24,8 @@ from anchors import Anchors
 import losses
 from dataloader import CSVDataset, collater, Resizer, AspectRatioBasedSampler, Augmenter, UnNormalizer, Normalizer
 from torch.utils.data import Dataset, DataLoader
+
+from imsitu_eval import BboxEval
 
 import coco_eval
 import csv_eval
@@ -47,13 +50,12 @@ def main(args=None):
 	parser.add_argument("--resume_epoch", type=int, default=0)
 	parser.add_argument("--reinit-classifier", action="store_true", default=False)
 	parser.add_argument("--lr", type=float, default=.00001)
+	parser.add_argument("--all-box-regression", action="store_true", default=False)
 
 	parser = parser.parse_args(args)
 
 	log_dir = "./runs/" + parser.title
 	writer = SummaryWriter(log_dir)
-
-	#pdb.set_trace()
 
 	with open(log_dir + '/config.csv', 'w') as f:
 		for item in vars(parser):
@@ -62,13 +64,10 @@ def main(args=None):
 
 	if not os.path.isdir(log_dir + "/checkpoints"):
 		os.makedirs(log_dir + "/checkpoints")
-
 	if not os.path.isdir(log_dir + '/map_files'):
 		os.makedirs(log_dir + '/map_files')
-
 	if parser.train_file is None:
 		raise ValueError('Must provide --train-file when training,')
-
 	if parser.classes_file is None:
 		raise ValueError('Must provide --classes-file when training')
 
@@ -80,13 +79,22 @@ def main(args=None):
 	else:
 		dataset_val = CSVDataset(train_file=parser.val_file, class_list=parser.classes_file, transform=transforms.Compose([Normalizer(), Resizer()]))
 
-	sampler = AspectRatioBasedSampler(dataset_train, batch_size=2, drop_last=False)
-	dataloader_train = DataLoader(dataset_train, num_workers=8, collate_fn=collater, batch_sampler=sampler)
+	sampler = AspectRatioBasedSampler(dataset_train, batch_size=16, drop_last=True)
+	dataloader_train = DataLoader(dataset_train, num_workers=16, collate_fn=collater, batch_sampler=sampler)
 
 	if dataset_val is not None:
-		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=1, drop_last=False)
-		dataloader_val = DataLoader(dataset_val, num_workers=0, collate_fn=collater, batch_sampler=sampler_val)
+		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=16, drop_last=False)
+		dataloader_val = DataLoader(dataset_val, num_workers=16, collate_fn=collater, batch_sampler=sampler_val)
 
+	print("loading dev")
+	with open('./dev.json') as f:
+		dev_gt = json.load(f)
+	print("loading imsitu_dpace")
+	with open('./imsitu_space.json') as f:
+		all = json.load(f)
+		verb_orders = all['verbs']
+
+	print("loading model")
 	# Create the model
 	if parser.depth == 18:
 		retinanet = model.resnet18(num_classes=dataset_train.num_classes(), pretrained=True)
@@ -101,6 +109,7 @@ def main(args=None):
 	else:
 		raise ValueError('Unsupported model depth, must be one of 18, 34, 50, 101, 152')
 
+	print("loading weights")
 	if parser.resume_model:
 		x = torch.load(parser.resume_model)
 		if parser.reinit_classifier:
@@ -120,13 +129,12 @@ def main(args=None):
 	retinanet = torch.nn.DataParallel(retinanet).cuda()
 	#torch.nn.DataParallel(retinanet).cuda()
 
-	retinanet.training = True
 	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
 	scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
 	loss_hist = collections.deque(maxlen=500)
 
-	retinanet.train()
-	retinanet.module.freeze_bn()
+	if parser.all_box_regression:
+		retinanet.all_box_regression = True
 
 	print('Num training images: {}'.format(len(dataset_train)))
 
@@ -141,89 +149,109 @@ def main(args=None):
 		avg_reg_loss = 0.0
 		avg_bbox_loss = 0.0
 		avg_verb_loss = 0.0
+		retinanet.training = True
 
 		for iter_num, data in enumerate(dataloader_train):
 			i += 1
 
-			try:
-				optimizer.zero_grad()
-				shape = data['img'].shape[2] * data['img'].shape[3]
-				#writer.add_scalar("train/image_shape", shape, epoch_num * (len(dataloader_train)) + i)
+			#try:
+			optimizer.zero_grad()
+			image = data['img'].cuda().float()
+			annotations = data['annot'].cuda().float()
+			verbs = data['verb_idx'].cuda()
+			#pdb.set_trace()
+			class_loss, reg_loss, bbox_loss, verb_loss = retinanet([image, annotations, verbs])
 
-				#pdb.set_trace()
+			avg_class_loss += class_loss.mean()
+			avg_reg_loss += reg_loss.mean()
+			avg_bbox_loss += bbox_loss.mean()
+			avg_verb_loss += verb_loss.mean()
 
-				verb_loss, class_loss, bbox_loss, reg_loss = retinanet([data['img'].cuda().float(), data['annot'].cuda().float()], data['verb_idx'])
+			if i % 100 == 0:
+				print(
+					'Epoch: {} | Iteration: {} | Class loss: {:1.5f} | Reg loss: {:1.5f} | Verb loss: {:1.5f} | Box loss: {:1.5f}'.format(
+						epoch_num, iter_num, float(class_loss.mean()), float(reg_loss.mean()),
+						float(verb_loss.mean()), float(bbox_loss.mean())))
+				writer.add_scalar("train/classification_loss", avg_class_loss / 100,
+								  epoch_num * len(dataloader_train) + i)
+				writer.add_scalar("train/regression_loss", avg_reg_loss / 100,
+								  epoch_num * (len(dataloader_train)) + i)
+				writer.add_scalar("train/bbox_loss", avg_bbox_loss / 100,
+								  epoch_num * (len(dataloader_train)) + i)
+				writer.add_scalar("train/verb_loss", avg_verb_loss / 100,
+								  epoch_num * (len(dataloader_train)) + i)
 
-				#pdb.set_trace()
+				avg_class_loss = 0.0
+				avg_reg_loss = 0.0
+				avg_bbox_loss = 0.0
+				avg_verb_loss = 0.0
 
-				avg_class_loss += class_loss
-				avg_reg_loss += reg_loss
-				avg_bbox_loss += bbox_loss
-				avg_verb_loss += verb_loss
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
 
-				if i % 100 == 0:
-					writer.add_scalar("train/classification_loss", avg_class_loss / 100,
-									  epoch_num * (len(dataloader_train)) + i)
-					writer.add_scalar("train/regression_loss", avg_reg_loss / 100,
-									  epoch_num * (len(dataloader_train)) + i)
-					writer.add_scalar("train/bbox_loss", avg_bbox_loss / 100,
-									  epoch_num * (len(dataloader_train)) + i)
-					writer.add_scalar("train/verb_loss", avg_verb_loss / 100,
-									  epoch_num * (len(dataloader_train)) + i)
-
-					avg_class_loss = 0.0
-					avg_reg_loss = 0.0
-					avg_bbox_loss = 0.0
-					avg_verb_loss = 0.0
-
-				loss = verb_loss + class_loss + bbox_loss + reg_loss
-
-				if bool(loss == 0):
-					continue
-
-				loss.backward()
-
-				torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
-
-				optimizer.step()
-
-				loss_hist.append(float(loss))
-
-				epoch_loss.append(float(loss))
-
-				print('Epoch: {} | Iteration: {} | Classification loss: {:1.5f} | Regression loss: {:1.5f}'.format(epoch_num, iter_num, float(class_loss), float(reg_loss)))
-
-			except Exception as e:
-				print(e)
+			if bool(loss == 0):
 				continue
+			#pdb.set_trace()
+			loss.backward()
+			# torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
+			optimizer.step()
+			loss_hist.append(float(loss))
+			epoch_loss.append(float(loss))
 
-		if epoch_num%2 == 0:
+			#except Exception as e:
+			#	print(e)
+		#		continue
 
+		if epoch_num%1 == 0:
+			evaluator = BboxEval()
 			print('Evaluating dataset')
-
+			retinanet.training = False
 			retinanet.eval()
-			mAP, AP_string = csv_eval.evaluate(dataset_val, retinanet.module, score_threshold=0.1)
-			with open(log_dir + '/map_files/{}_retinanet_{}.txt'.format(parser.dataset, epoch_num), 'w') as f:
-				f.write(AP_string)
-			total = 0.0
-			all = 0.0
-			total_unweighted = 0.0
-			for c in mAP:
-				total += mAP[c][0]*mAP[c][1]
-				total_unweighted += mAP[c][0]
-				all += mAP[c][1]
-			writer.add_scalar("val/mAP", total/all, epoch_num)
-			writer.add_scalar("val/mAP_unweighted", total_unweighted / len(mAP), epoch_num)
+			k = 0
+			for iter_num, data in enumerate(dataloader_val):
+				if k%100 == 0:
+					print(str(k) + " out of " + str(len(dataset_val)))
+				k += 1
+				verb_guess, noun_predicts, bbox_predicts = retinanet([data['img'].cuda().float(), data['verb_idx']])
+				for i in range(len(verb_guess)):
+					image = data['img_name'][i].split('/')[-1]
+					verb = dataset_train.idx_to_verb[verb_guess[i]]
+					nouns = []
+					bboxes = []
+					for j in range(6):
+						nouns.append(dataset_train.idx_to_class[noun_predicts[j][i]])
+						bboxes.append(bbox_predicts[j][i])
+					verb_gt, nouns_gt, boxes_gt = get_ground_truth(image, dev_gt[image], verb_orders)
+					evaluator.update(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders)
 
+			#pdb.set_trace()
+			writer.add_scalar("val/verb_acc", evaluator.verb(), epoch_num)
+			writer.add_scalar("val/value", evaluator.value(), epoch_num)
+			writer.add_scalar("val/value_all", evaluator.value_all(), epoch_num)
+			writer.add_scalar("val/value_bbox", evaluator.value_bbox(), epoch_num)
+			writer.add_scalar("val/value_all_bbox", evaluator.value_all_bbox(), epoch_num)
 
 		scheduler.step(np.mean(epoch_loss))
-
-
-		torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/{}_retinanet_{}.pth'.format(parser.dataset, epoch_num))
+		torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
 
 	retinanet.eval()
-
 	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
+
+def get_ground_truth(image, image_info, verb_orders):
+    verb = image.split("_")[0]
+    nouns = []
+    bboxes = []
+    for role in verb_orders[verb]["order"]:
+        all_options = set()
+        for i in range(3):
+            all_options.add(image_info["frames"][i][role])
+        nouns.append(all_options)
+        if image_info["bb"][role][0] == -1:
+            bboxes.append(None)
+        else:
+            b = [int(i) for i in image_info["bb"][role]]
+            bboxes.append(b)
+    return verb, nouns, bboxes
+
 
 if __name__ == '__main__':
  main()
