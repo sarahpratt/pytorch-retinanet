@@ -1,4 +1,5 @@
 from collections import defaultdict
+import pdb
 
 class BboxEval:
     def __init__(self):
@@ -65,6 +66,8 @@ class BboxEval:
 
         self.per_verb_roles[gt_verb] += len(order)
         self.per_verb_roles_bboxes[gt_verb] += len(order)
+
+        #pdb.set_trace()
 
         if pred_verb == gt_verb:
             self.correct_verbs += 1.0

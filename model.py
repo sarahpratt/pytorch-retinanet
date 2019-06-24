@@ -339,7 +339,8 @@ class ResNet(nn.Module):
             else:
                 noun_predicts.append(torch.argmax(classification, dim=1))
                 best_bbox = torch.argmax(boxes, dim=1)
-                bbox_predicts.append(regression[:, best_bbox, :])
+                #pdb.set_trace()
+                bbox_predicts.append(regression[torch.arange(batch_size), best_bbox, :])
 
 
         #.set_trace()

@@ -187,6 +187,7 @@ class FocalLoss(nn.Module):
             IoU = calc_iou(anchors[0, :, :], bbox_annotation[:, :4]) # num_anchors x num_annotations
             IoU_max, IoU_argmax = torch.max(IoU, dim=1) # num_anchors x 1
             positive_indices = torch.ge(IoU_max, 0.5).float().cuda()
+            #pdb.set_trace()
 
 
             bce_classification = self.loss_function(self.sig(classification), target_nouns)
