@@ -192,7 +192,9 @@ class ResNet(nn.Module):
         self.anchors = Anchors()
         self.regressBoxes = BBoxTransform()
         self.clipBoxes = ClipBoxes()
-        self.focalLoss = losses.FocalLoss()
+        #self.focalLoss = losses.FocalLoss()
+        self.focalLoss = losses.Focal_Reg_Loss()
+        #self.focalLoss = losses.BCE_Reg_Loss()
         self.regLoss = losses.RegressionLoss()
                 
         for m in self.modules():
@@ -208,7 +210,7 @@ class ResNet(nn.Module):
         self.fc = nn.Linear(2048, 504)
 
         self.verb_embeding = nn.Embedding(504, 512)
-        self.noun_embedding = nn.Embedding(410, 512)
+        self.noun_embedding = nn.Embedding(num_classes, 512)
         self.rnn = nn.LSTMCell(2048 + 512 + 4, 1024)
         self.rnn_linear = nn.Linear(1024, 256)
 

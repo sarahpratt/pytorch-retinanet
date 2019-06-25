@@ -51,6 +51,7 @@ def main(args=None):
 	parser.add_argument("--reinit-classifier", action="store_true", default=False)
 	parser.add_argument("--lr", type=float, default=.00001)
 	parser.add_argument("--all-box-regression", action="store_true", default=False)
+	parser.add_argument("--batch-size", type=int, default=16)
 
 	parser = parser.parse_args(args)
 
@@ -79,12 +80,12 @@ def main(args=None):
 	else:
 		dataset_val = CSVDataset(train_file=parser.val_file, class_list=parser.classes_file, transform=transforms.Compose([Normalizer(), Resizer()]))
 
-	sampler = AspectRatioBasedSampler(dataset_train, batch_size=16, drop_last=True)
-	dataloader_train = DataLoader(dataset_train, num_workers=16, collate_fn=collater, batch_sampler=sampler)
+	sampler = AspectRatioBasedSampler(dataset_train, batch_size=parser.batch_size, drop_last=True)
+	dataloader_train = DataLoader(dataset_train, num_workers=8, collate_fn=collater, batch_sampler=sampler)
 
 	if dataset_val is not None:
-		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=16, drop_last=False)
-		dataloader_val = DataLoader(dataset_val, num_workers=16, collate_fn=collater, batch_sampler=sampler_val)
+		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=parser.batch_size, drop_last=False)
+		dataloader_val = DataLoader(dataset_val, num_workers=8, collate_fn=collater, batch_sampler=sampler_val)
 
 	print("loading dev")
 	with open('./dev.json') as f:
@@ -163,17 +164,23 @@ def main(args=None):
 			verbs = data['verb_idx'].cuda()
 			#pdb.set_trace()
 			class_loss, reg_loss, bbox_loss, verb_loss = retinanet([image, annotations, verbs])
+			#pdb.set_trace()
 
-			avg_class_loss += class_loss.mean()
-			avg_reg_loss += reg_loss.mean()
-			avg_bbox_loss += bbox_loss.mean()
-			avg_verb_loss += verb_loss.mean()
+			avg_class_loss += class_loss.mean().item()
+			avg_reg_loss += reg_loss.mean().item()
+			avg_bbox_loss += bbox_loss.mean().item()
+			avg_verb_loss += verb_loss.mean().item()
+
+			print(
+				'Epoch: {} | Iteration: {} | Class loss: {:1.5f} | Reg loss: {:1.5f} | Verb loss: {:1.5f} | Box loss: {:1.5f}'.format(
+					epoch_num, iter_num, float(class_loss.mean()), float(reg_loss.mean()),
+					float(verb_loss.mean()), float(bbox_loss.mean())))
 
 			if i % 100 == 0:
 				print(
 					'Epoch: {} | Iteration: {} | Class loss: {:1.5f} | Reg loss: {:1.5f} | Verb loss: {:1.5f} | Box loss: {:1.5f}'.format(
-						epoch_num, iter_num, float(class_loss.mean()), float(reg_loss.mean()),
-						float(verb_loss.mean()), float(bbox_loss.mean())))
+						epoch_num, iter_num, float(avg_class_loss/100), float(avg_reg_loss/100),
+						float(avg_verb_loss/100), float(avg_bbox_loss/100)))
 				writer.add_scalar("train/classification_loss", avg_class_loss / 100,
 								  epoch_num * len(dataloader_train) + i)
 				writer.add_scalar("train/regression_loss", avg_reg_loss / 100,
@@ -188,7 +195,7 @@ def main(args=None):
 				avg_bbox_loss = 0.0
 				avg_verb_loss = 0.0
 
-			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
+			loss = class_loss.mean().item() + reg_loss.mean().item() + bbox_loss.mean().item() + verb_loss.mean().item()
 
 			if bool(loss == 0):
 				continue
@@ -196,8 +203,8 @@ def main(args=None):
 			loss.backward()
 			# torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
 			optimizer.step()
-			loss_hist.append(float(loss))
-			epoch_loss.append(float(loss))
+			#loss_hist.append(float(loss))
+			#epoch_loss.append(float(loss))
 
 			#except Exception as e:
 			#	print(e)
