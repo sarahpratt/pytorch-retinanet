@@ -165,13 +165,11 @@ def main(args=None):
 
 			try:
 				optimizer.zero_grad()
+				image = data['img'].cuda().float()
+				annotations = data['annot'].cuda().float()
+				verbs = data['verb_idx'].cuda()
 
-				#pdb.set_trace()
-
-				shape = data['img'].shape[2] * data['img'].shape[3]
-				writer.add_scalar("train/image_shape", shape, epoch_num * (len(dataloader_train)) + i)
-
-				classification_loss, regression_loss = retinanet([data['img'].cuda().float(), data['annot'].cuda().float()])
+				class_loss, reg_loss, bbox_loss, verb_loss = retinanet([image, annotations, verbs])
 
 				classification_loss = classification_loss.mean()
 				regression_loss = regression_loss.mean()

@@ -234,11 +234,11 @@ class ResNet(nn.Module):
                 layer.eval()
 
     def forward(self, inputs, return_all_scores=False):
-
+        # batch_size = inputs.shape[0]
         if self.training:
-            img_batch, annotations = inputs
+            img_batch, annotations, verb = inputs
         else:
-            img_batch = inputs
+            img_batch, verb = inputs
             
         x = self.conv1(img_batch)
         x = self.bn1(x)
