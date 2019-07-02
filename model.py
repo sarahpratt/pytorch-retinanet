@@ -103,9 +103,9 @@ class RegressionModel(nn.Module):
         out = self.act3(out)
 
         out = self.conv4(out)
-        out = self.act4(out)
+        out1 = self.act4(out)
 
-        out = self.output(out)
+        out = self.output(out1)
 
         # out is B x C x W x H, with C = 4*num_anchors
         out = out.permute(0, 2, 3, 1)
@@ -193,8 +193,8 @@ class ResNet(nn.Module):
         self.regressBoxes = BBoxTransform()
         self.clipBoxes = ClipBoxes()
         #self.focalLoss = losses.FocalLoss()
-        self.focalLoss = losses.Focal_Reg_Loss()
-        #self.focalLoss = losses.BCE_Reg_Loss()
+        #self.focalLoss = losses.Focal_Reg_Loss()
+        self.focalLoss = losses.BCE_Reg_Loss()
         self.regLoss = losses.RegressionLoss()
                 
         for m in self.modules():
@@ -251,17 +251,12 @@ class ResNet(nn.Module):
 
     def forward(self, inputs, return_all_scores=False):
 
-        #batch_size = inputs.shape[0]
-
         if self.training:
             img_batch, annotations, verb = inputs
         else:
             img_batch, verb = inputs
 
-        #pdb.set_trace()
-
         batch_size = img_batch.shape[0]
-        #print(batch_size)
 
         # Extract Visual Features
         x = self.conv1(img_batch)
@@ -275,13 +270,13 @@ class ResNet(nn.Module):
         x4 = self.layer4(x3)
 
         image_predict = self.avgpool(x4)
-        verb_predict = self.fc(image_predict.squeeze())
+        image_predict = image_predict.squeeze()
+        if len(image_predict.shape) == 1:
+            image_predict = image_predict.unsqueeze(0)
+        verb_predict = self.fc(image_predict)
         verb_guess = torch.argmax(verb_predict, dim=1)
 
-        #pdb.set_trace()
-
         verb_loss = self.loss_function(verb_predict, verb)
-
         previous_word = self.verb_embeding(verb_guess)
 
         # Get feature pyramid
@@ -304,8 +299,8 @@ class ResNet(nn.Module):
             noun_predicts = []
             bbox_predicts = []
 
-        for i in range(6):
-            rnn_input = torch.cat((image_predict.squeeze(), previous_word, previous_box), dim=1)
+        for i in range(1):
+            rnn_input = torch.cat((image_predict, previous_word, previous_box), dim=1)
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
 
@@ -331,33 +326,30 @@ class ResNet(nn.Module):
 
             if self.training:
                 anns = annotations[:, i, :].unsqueeze(1)
-                #class_loss = torch.Tensor(3).cuda()
-                #bbox_loss = torch.Tensor(3).cuda()
-                #reg_loss = torch.Tensor(3).cuda()
                 class_loss, bbox_loss, reg_loss = self.focalLoss(classification, regression, boxes, anchors, anns)
                 all_class_loss += class_loss
                 all_bbox_loss += bbox_loss
                 all_reg_loss += reg_loss
             else:
+                #pdb.set_trace()
                 noun_predicts.append(torch.argmax(classification, dim=1))
                 best_bbox = torch.argmax(boxes, dim=1)
                 #pdb.set_trace()
-                bbox_predicts.append(regression[torch.arange(batch_size), best_bbox, :])
+                transformed_anchors = self.regressBoxes(anchors, regression)
+                transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
+                bbox_predicts.append(transformed_anchors[torch.arange(batch_size), best_bbox, :])
+                pdb.set_trace()
+                #bbox_predicts.append(regression[torch.arange(batch_size), 0, :])
 
-
-        #.set_trace()
 
         if self.training:
             if self.all_box_regression:
                 reg_loss = regression_loss
             else:
                 reg_loss = all_reg_loss / 6.0
-            # losses = {'verb_loss': verb_loss, 'class_loss': all_class_loss.item() / 6.0,
-            #           'bbox_loss': all_bbox_loss.item() / 6.0, 'reg_loss': reg_loss}
-            return all_class_loss / 6.0, reg_loss, all_bbox_loss / 6.0, verb_loss
+            return all_class_loss, reg_loss, all_bbox_loss / 6.0, verb_loss
         else:
             return verb_guess, noun_predicts, bbox_predicts
-
 
 
 

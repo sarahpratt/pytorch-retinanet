@@ -1,10 +1,6 @@
-import time
 import os
-import copy
 import argparse
 import pdb
-import collections
-import sys
 import json
 
 import numpy as np
@@ -12,37 +8,26 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim import lr_scheduler
-from torch.autograd import Variable
 from torchvision import datasets, models, transforms
-import torchvision
 from tensorboardX import SummaryWriter
 
 import math
 import model
-from anchors import Anchors
-import losses
 from dataloader import CSVDataset, collater, Resizer, AspectRatioBasedSampler, Augmenter, UnNormalizer, Normalizer
 from torch.utils.data import Dataset, DataLoader
 
 from imsitu_eval import BboxEval
 
-import coco_eval
-import csv_eval
-
 assert torch.__version__.split('.')[1] == '4'
 
 print('CUDA available: {}'.format(torch.cuda.is_available()))
 
-
 def main(args=None):
 
-	parser     = argparse.ArgumentParser(description='Simple training script for training a RetinaNet network.')
-
+	parser = argparse.ArgumentParser(description='Simple training script for training a RetinaNet network.')
 	parser.add_argument('--train-file', help='Path to file containing training annotations (see readme)')
 	parser.add_argument('--classes-file', help='Path to file containing class list (see readme)')
 	parser.add_argument('--val-file', help='Path to file containing validation annotations (optional, see readme)')
-
 	parser.add_argument('--depth', help='Resnet depth, must be one of 18, 34, 50, 101, 152', type=int, default=50)
 	parser.add_argument('--epochs', help='Number of epochs', type=int, default=100)
 	parser.add_argument('--title', type=str, default='')
@@ -110,36 +95,28 @@ def main(args=None):
 	else:
 		raise ValueError('Unsupported model depth, must be one of 18, 34, 50, 101, 152')
 
-	print("loading weights")
-	if parser.resume_model:
-		x = torch.load(parser.resume_model)
-		if parser.reinit_classifier:
-			dummy = nn.Conv2d(256, 9*dataset_train.num_classes(), kernel_size=3, padding=1)
-			x['classificationModel.output.weight'] = dummy.weight.clone()
-			x['classificationModel.output.bias'] = dummy.bias.clone()
-			prior = 0.01
-			x['classificationModel.output.weight'].data.fill_(0)
-			x['classificationModel.output.bias'].data.fill_(-math.log((1.0 - prior) / prior))
-		retinanet.load_state_dict(x)
-
 	use_gpu = True
 
 	if use_gpu:
 		retinanet = retinanet.cuda()
-	
-	retinanet = torch.nn.DataParallel(retinanet).cuda()
-	#torch.nn.DataParallel(retinanet).cuda()
 
+	retinanet = torch.nn.DataParallel(retinanet).cuda()
 	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
 	scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
-	loss_hist = collections.deque(maxlen=500)
 
 	if parser.all_box_regression:
 		retinanet.all_box_regression = True
 
 	print('Num training images: {}'.format(len(dataset_train)))
 
-	for epoch_num in range(parser.resume_epoch, parser.epochs):
+	#if parser.resume_model:
+	#x = torch.load('~/pytorch-retinanet/runs/JUST_VERB_AGENT_2/checkpoints/retinanet_3.pth')
+	#retinanet.module.load_state_dict(x)
+
+
+
+	#for epoch_num in range(parser.resume_epoch, parser.epochs):
+	for epoch_num in range(0, parser.epochs):
 
 		retinanet.train()
 		retinanet.module.freeze_bn()
@@ -154,27 +131,17 @@ def main(args=None):
 
 		for iter_num, data in enumerate(dataloader_train):
 			i += 1
-			# if i > 50:
-			# 	break
 
-			#try:
 			optimizer.zero_grad()
 			image = data['img'].cuda().float()
 			annotations = data['annot'].cuda().float()
 			verbs = data['verb_idx'].cuda()
-			#pdb.set_trace()
 			class_loss, reg_loss, bbox_loss, verb_loss = retinanet([image, annotations, verbs])
-			#pdb.set_trace()
 
 			avg_class_loss += class_loss.mean().item()
 			avg_reg_loss += reg_loss.mean().item()
 			avg_bbox_loss += bbox_loss.mean().item()
 			avg_verb_loss += verb_loss.mean().item()
-
-			print(
-				'Epoch: {} | Iteration: {} | Class loss: {:1.5f} | Reg loss: {:1.5f} | Verb loss: {:1.5f} | Box loss: {:1.5f}'.format(
-					epoch_num, iter_num, float(class_loss.mean()), float(reg_loss.mean()),
-					float(verb_loss.mean()), float(bbox_loss.mean())))
 
 			if i % 100 == 0:
 				print(
@@ -195,20 +162,16 @@ def main(args=None):
 				avg_bbox_loss = 0.0
 				avg_verb_loss = 0.0
 
-			loss = class_loss.mean().item() + reg_loss.mean().item() + bbox_loss.mean().item() + verb_loss.mean().item()
+			#loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
+			loss = verb_loss.mean() + class_loss.mean()
 
 			if bool(loss == 0):
 				continue
-			#pdb.set_trace()
 			loss.backward()
 			# torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
 			optimizer.step()
-			#loss_hist.append(float(loss))
-			#epoch_loss.append(float(loss))
 
-			#except Exception as e:
-			#	print(e)
-		#		continue
+		torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
 
 		if epoch_num%1 == 0:
 			evaluator = BboxEval()
@@ -226,13 +189,14 @@ def main(args=None):
 					verb = dataset_train.idx_to_verb[verb_guess[i]]
 					nouns = []
 					bboxes = []
-					for j in range(6):
+					for j in range(1):
 						nouns.append(dataset_train.idx_to_class[noun_predicts[j][i]])
 						bboxes.append(bbox_predicts[j][i])
 					verb_gt, nouns_gt, boxes_gt = get_ground_truth(image, dev_gt[image], verb_orders)
 					evaluator.update(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders)
+					if False:
+						evaluator.visualize(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders, data['img_name'][i])
 
-			#pdb.set_trace()
 			writer.add_scalar("val/verb_acc", evaluator.verb(), epoch_num)
 			writer.add_scalar("val/value", evaluator.value(), epoch_num)
 			writer.add_scalar("val/value_all", evaluator.value_all(), epoch_num)
@@ -240,27 +204,26 @@ def main(args=None):
 			writer.add_scalar("val/value_all_bbox", evaluator.value_all_bbox(), epoch_num)
 
 		scheduler.step(np.mean(epoch_loss))
-		torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
-
 	retinanet.eval()
 	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
 
 def get_ground_truth(image, image_info, verb_orders):
-    verb = image.split("_")[0]
-    nouns = []
-    bboxes = []
-    for role in verb_orders[verb]["order"]:
-        all_options = set()
-        for i in range(3):
-            all_options.add(image_info["frames"][i][role])
-        nouns.append(all_options)
-        if image_info["bb"][role][0] == -1:
-            bboxes.append(None)
-        else:
-            b = [int(i) for i in image_info["bb"][role]]
-            bboxes.append(b)
-    return verb, nouns, bboxes
-
+	verb = image.split("_")[0]
+	nouns = []
+	bboxes = []
+	role = "agent"
+	if role in verb_orders[verb]["order"]:
+	#for role in verb_orders[verb]["order"]:
+		all_options = set()
+		for i in range(3):
+			all_options.add(image_info["frames"][i][role])
+		nouns.append(all_options)
+		if image_info["bb"][role][0] == -1:
+			bboxes.append(None)
+		else:
+			b = [int(i) for i in image_info["bb"][role]]
+			bboxes.append(b)
+	return verb, nouns, bboxes
 
 if __name__ == '__main__':
  main()

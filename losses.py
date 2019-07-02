@@ -14,13 +14,10 @@ def calc_iou(a, b):
     ih = torch.clamp(ih, min=0)
 
     ua = torch.unsqueeze((a[:, 2] - a[:, 0]) * (a[:, 3] - a[:, 1]), dim=1) + area - iw * ih
-
     ua = torch.clamp(ua, min=1e-8)
 
     intersection = iw * ih
-
     IoU = intersection / ua
-
     return IoU
 
 class FocalLossOld(nn.Module):
@@ -189,8 +186,6 @@ class FocalLoss_LSTM(nn.Module):
             targets[torch.lt(IoU_max, 0.4), :] = 0
 
             positive_indices = torch.ge(IoU_max, 0.5)
-
-            #pdb.set_trace()
 
             num_positive_anchors = positive_indices.sum()
 
@@ -404,6 +399,7 @@ class BCE_Reg_Loss(nn.Module):
         anchor_ctr_y   = anchor[:, 1] + 0.5 * anchor_heights
 
         for j in range(batch_size):
+            pdb.set_trace()
 
             classification = classifications[j, :]
             regression = regressions[j, :, :]
@@ -439,10 +435,10 @@ class BCE_Reg_Loss(nn.Module):
             #print("mean done")
 
             assigned_annotations = bbox_annotation[IoU_argmax, :]
-            positive_indices = positive_indices.long()
+            positive_indices = positive_indices.byte()
             #print("assigned done")
 
-            if positive_indices.sum() > 0:
+            if positive_indices.any():
                 assigned_annotations = assigned_annotations[positive_indices, :]
 
                 anchor_widths_pi = anchor_widths[positive_indices]
@@ -471,7 +467,11 @@ class BCE_Reg_Loss(nn.Module):
 
                 negative_indices = 1 - positive_indices
 
+                pdb.set_trace()
+
+
                 regression_diff = torch.abs(targets - regression[positive_indices, :])
+
 
                 regression_loss = torch.where(
                     torch.le(regression_diff, 1.0 / 9.0),

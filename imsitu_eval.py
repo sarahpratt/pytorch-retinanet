@@ -1,5 +1,8 @@
 from collections import defaultdict
 import pdb
+from PIL import Image
+import numpy as np
+import cv2
 
 class BboxEval:
     def __init__(self):
@@ -58,7 +61,8 @@ class BboxEval:
 
 
     def update(self, pred_verb, pred_nouns, pred_bboxes, gt_verb, gt_nouns, gt_bboxes, verb_order):
-        order = verb_order[gt_verb]["order"]
+        #order = verb_order[gt_verb]["order"]
+        order = ["role"]
 
         self.all_verbs += 1.0
         self.per_verb_occ[gt_verb] += 1.0
@@ -67,27 +71,70 @@ class BboxEval:
         self.per_verb_roles[gt_verb] += len(order)
         self.per_verb_roles_bboxes[gt_verb] += len(order)
 
-        #pdb.set_trace()
-
         if pred_verb == gt_verb:
             self.correct_verbs += 1.0
             value_all_bbox = 1.0
             value_all = 1.0
             for i in range(len(order)):
-
                 if pred_nouns[i] in gt_nouns[i]:
                     self.per_verb_roles_correct[gt_verb] += 1.0
                 else:
                     value_all = 0.0
-
                 if pred_nouns[i] in gt_nouns[i] and (self.bb_intersection_over_union(pred_bboxes[i], gt_bboxes[i])):
                     self.per_verb_roles_correct_bboxes[gt_verb] += 1.0
                 else:
                     value_all_bbox = 0.0
-
             self.per_verb_all_correct_bboxes[gt_verb] += value_all_bbox
             self.per_verb_all_correct[gt_verb] += value_all
 
+    def visualize(self, pred_verb, pred_nouns, pred_bboxes, gt_verb, gt_nouns, gt_bboxes, verb_order, image):
+        verb_order = ['role']
+
+        img = Image.open('./images_512/' + image)
+        img = np.float32(img)
+
+        width = img.shape[1]
+
+        for b in pred_bboxes:
+            #pdb.set_trace()
+            if b is not None and b[0] != -1:
+                cv2.rectangle(img, (b[0], b[1]), (b[2], b[3]), (255, 0, 0), 3)
+
+        img_gt = Image.open('./images_512/' + image)
+        img_gt = np.float32(img_gt)
+        for b in gt_bboxes:
+            if b is not None and b[0] != -1:
+                cv2.rectangle(img_gt, (b[0], b[1]), (b[2], b[3]), (255, 0, 0), 3)
+
+        new_im = Image.new('RGB', (img.shape[1] * 2 + 200 * 2, img.shape[0]))
+        new_im = np.float32(new_im)
+
+        if len(gt_nouns) == 0:
+            pdb.set_trace()
+
+        cv2.putText(new_im, gt_verb, (0, 0), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
+        for i in range(len(verb_order)):
+            cv2.putText(new_im, verb_order[i], (0, 50), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
+            j = 0
+            for word in gt_nouns[i]:
+                cv2.putText(new_im, word, (0, 50 + j*20), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
+                j += 1
+
+        cv2.putText(new_im, pred_verb, (img.shape[1], 0), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
+        for i in range(len(verb_order)):
+            cv2.putText(new_im, verb_order[i], (img.shape[1], 50), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
+            j = 0
+            for word in pred_nouns[i]:
+                cv2.putText(new_im, word, (img.shape[1], 50 + j * 20), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
+                j += 1
+
+        new_im = Image.fromarray(np.uint8(new_im))
+        img = Image.fromarray(np.uint8(img))
+        img_gt = Image.fromarray(np.uint8(img_gt))
+        new_im.paste(img_gt, box=(200, 0))
+        new_im.paste(img, box=(400 + width, 0))
+
+        new_im.save('./predictions/' + image)
 
     def bb_intersection_over_union(self, boxA, boxB):
         if boxA is None and boxB is None:
