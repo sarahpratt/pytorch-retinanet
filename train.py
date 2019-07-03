@@ -36,11 +36,9 @@ def main(args=None):
 
 	parser     = argparse.ArgumentParser(description='Simple training script for training a RetinaNet network.')
 
-	parser.add_argument('--dataset', help='Dataset type, must be one of csv or coco.')
-	parser.add_argument('--coco_path', help='Path to COCO directory')
-	parser.add_argument('--csv_train', help='Path to file containing training annotations (see readme)')
-	parser.add_argument('--csv_classes', help='Path to file containing class list (see readme)')
-	parser.add_argument('--csv_val', help='Path to file containing validation annotations (optional, see readme)')
+	parser.add_argument('--train-file', help='Path to file containing training annotations (see readme)')
+	parser.add_argument('--classes-file', help='Path to file containing class list (see readme)')
+	parser.add_argument('--val-file', help='Path to file containing validation annotations (optional, see readme)')
 
 	parser.add_argument('--depth', help='Resnet depth, must be one of 18, 34, 50, 101, 152', type=int, default=50)
 	parser.add_argument('--epochs', help='Number of epochs', type=int, default=100)
@@ -49,6 +47,8 @@ def main(args=None):
 	parser.add_argument("--resume_epoch", type=int, default=0)
 	parser.add_argument("--reinit-classifier", action="store_true", default=False)
 	parser.add_argument("--lr", type=float, default=.00001)
+	parser.add_argument("--all-box-regression", action="store_true", default=False)
+	parser.add_argument("--batch-size", type=int, default=16)
 
 	parser = parser.parse_args(args)
 
@@ -68,41 +68,22 @@ def main(args=None):
 	if not os.path.isdir(log_dir + '/map_files'):
 		os.makedirs(log_dir + '/map_files')
 
-	# Create the data loaders
-	if parser.dataset == 'coco':
+	dataset_train = CSVDataset(train_file=parser.train_file, class_list=parser.classes_file,
+							   transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
 
-		if parser.coco_path is None:
-			raise ValueError('Must provide --coco_path when training on COCO,')
-
-		dataset_train = CocoDataset(parser.coco_path, set_name='train2017', transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
-		dataset_val = CocoDataset(parser.coco_path, set_name='val2017', transform=transforms.Compose([Normalizer(), Resizer()]))
-
-	elif parser.dataset == 'csv':
-
-		if parser.csv_train is None:
-			raise ValueError('Must provide --csv_train when training on COCO,')
-
-		if parser.csv_classes is None:
-			raise ValueError('Must provide --csv_classes when training on COCO,')
-
-
-		dataset_train = CSVDataset(train_file=parser.csv_train, class_list=parser.csv_classes, transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
-
-		if parser.csv_val is None:
-			dataset_val = None
-			print('No validation annotations provided.')
-		else:
-			dataset_val = CSVDataset(train_file=parser.csv_val, class_list=parser.csv_classes, transform=transforms.Compose([Normalizer(), Resizer()]))
-
+	if parser.val_file is None:
+		dataset_val = None
+		print('No validation annotations provided.')
 	else:
-		raise ValueError('Dataset type not understood (must be csv or coco), exiting.')
+		dataset_val = CSVDataset(train_file=parser.val_file, class_list=parser.classes_file,
+								 transform=transforms.Compose([Normalizer(), Resizer()]))
 
-	sampler = AspectRatioBasedSampler(dataset_train, batch_size=8, drop_last=False)
+	sampler = AspectRatioBasedSampler(dataset_train, batch_size=parser.batch_size, drop_last=True)
 	dataloader_train = DataLoader(dataset_train, num_workers=8, collate_fn=collater, batch_sampler=sampler)
 
 	if dataset_val is not None:
-		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=1, drop_last=False)
-		dataloader_val = DataLoader(dataset_val, num_workers=0, collate_fn=collater, batch_sampler=sampler_val)
+		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=parser.batch_size, drop_last=False)
+		dataloader_val = DataLoader(dataset_val, num_workers=8, collate_fn=collater, batch_sampler=sampler_val)
 
 	# Create the model
 	if parser.depth == 18:
@@ -147,6 +128,9 @@ def main(args=None):
 
 	retinanet.train()
 	retinanet.module.freeze_bn()
+
+	x = torch.load('./csv_retinanet_20.pth')
+	retinanet.module.load_state_dict(x)
 
 	print('Num training images: {}'.format(len(dataset_train)))
 

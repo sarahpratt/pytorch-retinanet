@@ -107,6 +107,8 @@ class RegressionModel(nn.Module):
 
         out = self.output(out)
 
+        pdb.set_trace()
+
         # out is B x C x W x H, with C = 4*num_anchors
         out = out.permute(0, 2, 3, 1)
 
