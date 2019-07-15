@@ -2,6 +2,7 @@ import os
 import argparse
 import pdb
 import json
+import random
 
 import numpy as np
 
@@ -69,7 +70,7 @@ def main(args=None):
 	dataloader_train = DataLoader(dataset_train, num_workers=8, collate_fn=collater, batch_sampler=sampler)
 
 	if dataset_val is not None:
-		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=parser.batch_size, drop_last=False)
+		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=parser.batch_size, drop_last=True)
 		dataloader_val = DataLoader(dataset_val, num_workers=8, collate_fn=collater, batch_sampler=sampler_val)
 
 	print("loading dev")
@@ -114,7 +115,6 @@ def main(args=None):
 	#retinanet.module.load_state_dict(x)
 
 
-
 	#for epoch_num in range(parser.resume_epoch, parser.epochs):
 	for epoch_num in range(0, parser.epochs):
 
@@ -136,11 +136,12 @@ def main(args=None):
 			image = data['img'].cuda().float()
 			annotations = data['annot'].cuda().float()
 			verbs = data['verb_idx'].cuda()
-			class_loss, reg_loss, bbox_loss, verb_loss = retinanet([image, annotations, verbs])
+			#class_loss, reg_loss, bbox_loss, verb_loss = retinanet([image, annotations, verbs])
+			class_loss, reg_loss, verb_loss = retinanet([image, annotations, verbs])
 
 			avg_class_loss += class_loss.mean().item()
 			avg_reg_loss += reg_loss.mean().item()
-			avg_bbox_loss += bbox_loss.mean().item()
+			#avg_bbox_loss += bbox_loss.mean().item()
 			avg_verb_loss += verb_loss.mean().item()
 
 			if i % 100 == 0:
@@ -152,8 +153,8 @@ def main(args=None):
 								  epoch_num * len(dataloader_train) + i)
 				writer.add_scalar("train/regression_loss", avg_reg_loss / 100,
 								  epoch_num * (len(dataloader_train)) + i)
-				writer.add_scalar("train/bbox_loss", avg_bbox_loss / 100,
-								  epoch_num * (len(dataloader_train)) + i)
+				# writer.add_scalar("train/bbox_loss", avg_bbox_loss / 100,
+				# 				  epoch_num * (len(dataloader_train)) + i)
 				writer.add_scalar("train/verb_loss", avg_verb_loss / 100,
 								  epoch_num * (len(dataloader_train)) + i)
 
@@ -163,12 +164,16 @@ def main(args=None):
 				avg_verb_loss = 0.0
 
 			#loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
-			loss = verb_loss.mean() + class_loss.mean()
+
+			loss = class_loss.mean() + reg_loss.mean() + verb_loss.mean()
+
+			epoch_loss.append(loss)
+			#loss = verb_loss.mean() + class_loss.mean()
 
 			if bool(loss == 0):
 				continue
 			loss.backward()
-			# torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
+			torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
 			optimizer.step()
 
 		torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
@@ -180,22 +185,27 @@ def main(args=None):
 			retinanet.eval()
 			k = 0
 			for iter_num, data in enumerate(dataloader_val):
+
 				if k%100 == 0:
-					print(str(k) + " out of " + str(len(dataset_val)))
+					print(str(k) + " out of " + str(len(dataset_val)/parser.batch_size))
 				k += 1
-				verb_guess, noun_predicts, bbox_predicts = retinanet([data['img'].cuda().float(), data['verb_idx']])
+				x = data['img'].cuda().float()
+				y = data['verb_idx'].cuda()
+
+				verb_guess, noun_predicts, bbox_predicts = retinanet([x, y])
 				for i in range(len(verb_guess)):
 					image = data['img_name'][i].split('/')[-1]
 					verb = dataset_train.idx_to_verb[verb_guess[i]]
 					nouns = []
 					bboxes = []
-					for j in range(1):
-						nouns.append(dataset_train.idx_to_class[noun_predicts[j][i]])
-						bboxes.append(bbox_predicts[j][i])
+					for j in range(2):
+						if dataset_train.idx_to_class[noun_predicts[j][i]] == 'not':
+							nouns.append('')
+						else:
+							nouns.append(dataset_train.idx_to_class[noun_predicts[j][i]])
+						bboxes.append(bbox_predicts[j][i] / data['scale'][i])
 					verb_gt, nouns_gt, boxes_gt = get_ground_truth(image, dev_gt[image], verb_orders)
 					evaluator.update(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders)
-					if False:
-						evaluator.visualize(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders, data['img_name'][i])
 
 			writer.add_scalar("val/verb_acc", evaluator.verb(), epoch_num)
 			writer.add_scalar("val/value", evaluator.value(), epoch_num)
@@ -203,7 +213,8 @@ def main(args=None):
 			writer.add_scalar("val/value_bbox", evaluator.value_bbox(), epoch_num)
 			writer.add_scalar("val/value_all_bbox", evaluator.value_all_bbox(), epoch_num)
 
-		scheduler.step(np.mean(epoch_loss))
+		epoch_loss = torch.Tensor(epoch_loss)
+		scheduler.step(epoch_loss.mean())
 	retinanet.eval()
 	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
 
@@ -211,18 +222,20 @@ def get_ground_truth(image, image_info, verb_orders):
 	verb = image.split("_")[0]
 	nouns = []
 	bboxes = []
-	role = "agent"
-	if role in verb_orders[verb]["order"]:
-	#for role in verb_orders[verb]["order"]:
-		all_options = set()
-		for i in range(3):
-			all_options.add(image_info["frames"][i][role])
-		nouns.append(all_options)
-		if image_info["bb"][role][0] == -1:
-			bboxes.append(None)
-		else:
-			b = [int(i) for i in image_info["bb"][role]]
-			bboxes.append(b)
+	roles = ["agent", "tool"]
+	#roles = ["agent"]
+	if "agent" in verb_orders[verb]["order"] and "tool" in verb_orders[verb]["order"]:
+		#for role in verb_orders[verb]["order"]:
+		for role in roles:
+			all_options = set()
+			for i in range(3):
+				all_options.add(image_info["frames"][i][role])
+			nouns.append(all_options)
+			if image_info["bb"][role][0] == -1:
+				bboxes.append(None)
+			else:
+				b = [int(i) for i in image_info["bb"][role]]
+				bboxes.append(b)
 	return verb, nouns, bboxes
 
 if __name__ == '__main__':

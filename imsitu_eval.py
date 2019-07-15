@@ -62,7 +62,7 @@ class BboxEval:
 
     def update(self, pred_verb, pred_nouns, pred_bboxes, gt_verb, gt_nouns, gt_bboxes, verb_order):
         #order = verb_order[gt_verb]["order"]
-        order = ["role"]
+        order = ["agent", "tool"]
 
         self.all_verbs += 1.0
         self.per_verb_occ[gt_verb] += 1.0
@@ -70,6 +70,9 @@ class BboxEval:
 
         self.per_verb_roles[gt_verb] += len(order)
         self.per_verb_roles_bboxes[gt_verb] += len(order)
+
+        if len(pred_nouns) == 0:
+            pdb.set_trace()
 
         if pred_verb == gt_verb:
             self.correct_verbs += 1.0
@@ -87,8 +90,8 @@ class BboxEval:
             self.per_verb_all_correct_bboxes[gt_verb] += value_all_bbox
             self.per_verb_all_correct[gt_verb] += value_all
 
-    def visualize(self, pred_verb, pred_nouns, pred_bboxes, gt_verb, gt_nouns, gt_bboxes, verb_order, image):
-        verb_order = ['role']
+    def visualize(self, pred_verb, pred_nouns, pred_bboxes, gt_verb, gt_nouns, gt_bboxes, verb_order, image, word_dict):
+        verb_order = ['agent', 'tool']
 
         img = Image.open('./images_512/' + image)
         img = np.float32(img)
@@ -112,21 +115,30 @@ class BboxEval:
         if len(gt_nouns) == 0:
             pdb.set_trace()
 
-        cv2.putText(new_im, gt_verb, (0, 0), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
+        cv2.putText(new_im, gt_verb, (0, 20), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 255), 2)
         for i in range(len(verb_order)):
-            cv2.putText(new_im, verb_order[i], (0, 50), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
+            cv2.putText(new_im, verb_order[i], (0, 60*(i+1)), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 255), 2)
             j = 0
             for word in gt_nouns[i]:
-                cv2.putText(new_im, word, (0, 50 + j*20), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
+                if word in word_dict:
+                    w = word_dict[word]['gloss'][0]
+                else:
+                    w = word
+                cv2.putText(new_im, w, (0, 80*(i+1) + j*20), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 255), 1)
                 j += 1
 
-        cv2.putText(new_im, pred_verb, (img.shape[1], 0), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
+        cv2.putText(new_im, pred_verb, (img.shape[1] + 200, 20), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 255), 2)
         for i in range(len(verb_order)):
-            cv2.putText(new_im, verb_order[i], (img.shape[1], 50), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
+            cv2.putText(new_im, verb_order[i], (img.shape[1] + 200, 60*(i+1)), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 255), 2)
             j = 0
-            for word in pred_nouns[i]:
-                cv2.putText(new_im, word, (img.shape[1], 50 + j * 20), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
-                j += 1
+            #pdb.set_trace()
+            #for word in pred_nouns[i]:
+            if pred_nouns[i] in word_dict:
+                w = word_dict[pred_nouns[i]]['gloss'][0]
+            else:
+                w = pred_nouns[i]
+            cv2.putText(new_im, w, (img.shape[1] + 200, 80*(i+1) + j * 20), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 255), 1)
+            j += 1
 
         new_im = Image.fromarray(np.uint8(new_im))
         img = Image.fromarray(np.uint8(img))

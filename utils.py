@@ -82,11 +82,13 @@ class BBoxTransform(nn.Module):
     def __init__(self, mean=None, std=None):
         super(BBoxTransform, self).__init__()
         if mean is None:
-            self.mean = torch.from_numpy(np.array([0, 0, 0, 0]).astype(np.float32)).cuda()
+            self.mean = torch.from_numpy(np.array([0, 0, 0, 0]).astype(np.float32))
+            #self.mean = torch.Tensor([0, 0, 0, 0])
         else:
             self.mean = mean
         if std is None:
-            self.std = torch.from_numpy(np.array([0.1, 0.1, 0.2, 0.2]).astype(np.float32)).cuda()
+            self.std = torch.from_numpy(np.array([0.1, 0.1, 0.2, 0.2]).astype(np.float32))
+            #self.mean = torch.Tensor([0.1, 0.1, 0.2, 0.2])
         else:
             self.std = std
 
@@ -97,10 +99,10 @@ class BBoxTransform(nn.Module):
         ctr_x   = boxes[:, :, 0] + 0.5 * widths
         ctr_y   = boxes[:, :, 1] + 0.5 * heights
 
-        dx = deltas[:, :, 0] * self.std[0] + self.mean[0]
-        dy = deltas[:, :, 1] * self.std[1] + self.mean[1]
-        dw = deltas[:, :, 2] * self.std[2] + self.mean[2]
-        dh = deltas[:, :, 3] * self.std[3] + self.mean[3]
+        dx = deltas[:, :, 0] * self.std[0].cuda() + self.mean[0].cuda()
+        dy = deltas[:, :, 1] * self.std[1].cuda() + self.mean[1].cuda()
+        dw = deltas[:, :, 2] * self.std[2].cuda() + self.mean[2].cuda()
+        dh = deltas[:, :, 3] * self.std[3].cuda() + self.mean[3].cuda()
 
         pred_ctr_x = ctr_x + dx * widths
         pred_ctr_y = ctr_y + dy * heights

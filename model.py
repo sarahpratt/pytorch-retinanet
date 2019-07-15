@@ -71,6 +71,7 @@ class PyramidFeatures(nn.Module):
         P7_x = self.P7_2(P7_x)
 
         return [P3_x, P4_x, P5_x, P6_x, P7_x]
+        #return [P4_x, P5_x, P6_x, P7_x]
 
 
 class RegressionModel(nn.Module):
@@ -112,59 +113,51 @@ class RegressionModel(nn.Module):
 
         return out.contiguous().view(out.shape[0], -1, 4)
 
+
 class ClassificationModel(nn.Module):
     def __init__(self, num_features_in, num_anchors=9, num_classes=80, prior=0.01, feature_size=256):
         super(ClassificationModel, self).__init__()
-
         self.num_classes = num_classes
         self.num_anchors = num_anchors
-        
+
         self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
         self.act1 = nn.ReLU()
-
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act2 = nn.ReLU()
-
         self.conv3 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act3 = nn.ReLU()
-
         self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act4 = nn.ReLU()
 
-        self.output = nn.Conv2d(feature_size, num_anchors, kernel_size=3, padding=1)
-        self.output_act = nn.Sigmoid()
+        self.output_retina = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
+        self.output_act_retina = nn.Sigmoid()
 
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(feature_size, num_classes)
+        #self.output_bbox_dist = nn.Conv2d(feature_size, num_anchors, kernel_size=3, padding=1)
+        #self.output_bbox_act = nn.Sigmoid()
 
     def forward(self, x):
-
         out = self.conv1(x)
         out = self.act1(out)
-
         out = self.conv2(out)
         out = self.act2(out)
-
         out = self.conv3(out)
         out = self.act3(out)
-
         out = self.conv4(out)
         out = self.act4(out)
+        out1 = self.output_retina(out)
+        out1 = self.output_act_retina(out1)
 
-        category_prediction = self.avgpool(out)
-        category_prediction = self.fc(category_prediction.squeeze())
+        #out_dist = self.output_bbox_dist(out)
+        #out_dist = self.output_bbox_act(out_dist)
 
-        out = self.output(out)
-        out = self.output_act(out)
+        # out is B x C x W x H, with C = n_classes + n_anchors
 
-        # out is B x A x W x H, with A = n_anchors
-        out1 = out.permute(0, 2, 3, 1)
-
+        out1 = out1.permute(0, 2, 3, 1)
         batch_size, width, height, channels = out1.shape
+        out2 = out1.view(batch_size, width, height, self.num_anchors, self.num_classes)
+        #return out2.contiguous().view(x.shape[0], -1, self.num_classes), out_dist.contiguous().view(x.shape[0], -1)
+        return out2.contiguous().view(x.shape[0], -1, self.num_classes)
 
-        out2 = out1.view(batch_size, width, height, self.num_anchors)
-
-        return out2.contiguous().view(x.shape[0], -1), category_prediction.contiguous().view(x.shape[0], -1)
 
 class ResNet(nn.Module):
 
@@ -192,9 +185,9 @@ class ResNet(nn.Module):
         self.anchors = Anchors()
         self.regressBoxes = BBoxTransform()
         self.clipBoxes = ClipBoxes()
-        #self.focalLoss = losses.FocalLoss()
+        self.focalLoss = losses.FocalLossOld_2()
         #self.focalLoss = losses.Focal_Reg_Loss()
-        self.focalLoss = losses.BCE_Reg_Loss()
+        #self.focalLoss = losses.BCE_Reg_Loss()
         self.regLoss = losses.RegressionLoss()
                 
         for m in self.modules():
@@ -216,8 +209,11 @@ class ResNet(nn.Module):
 
         prior = 0.01
         
-        self.classificationModel.output.weight.data.fill_(0)
-        self.classificationModel.output.bias.data.fill_(-math.log((1.0-prior)/prior))
+        self.classificationModel.output_retina.weight.data.fill_(0)
+        self.classificationModel.output_retina.bias.data.fill_(-math.log((1.0-prior)/prior))
+
+        #self.classificationModel.output_bbox_dist.weight.data.fill_(0)
+        #self.classificationModel.output_bbox_dist.bias.data.fill_(-math.log((1.0 - prior) / prior))
 
         self.regressionModel.output.weight.data.fill_(0)
         self.regressionModel.output.bias.data.fill_(0)
@@ -251,12 +247,17 @@ class ResNet(nn.Module):
 
     def forward(self, inputs, return_all_scores=False):
 
+        #pdb.set_trace()
+
         if self.training:
             img_batch, annotations, verb = inputs
         else:
             img_batch, verb = inputs
 
         batch_size = img_batch.shape[0]
+
+        # if not self.training:
+        #     pdb.set_trace()
 
         # Extract Visual Features
         x = self.conv1(img_batch)
@@ -282,72 +283,77 @@ class ResNet(nn.Module):
         # Get feature pyramid
         features = self.fpn([x2, x3, x4])
 
-        hx, cx = torch.zeros(batch_size, 1024).cuda(), torch.zeros(batch_size, 1024).cuda()
-        previous_box = torch.zeros(batch_size, 4).cuda()
+        anchors = self.anchors(img_batch)
+
+        #SARAH - remove feature batch
+        features.pop(0)
+
+        hx, cx = torch.zeros(batch_size, 1024).cuda(x.device), torch.zeros(batch_size, 1024).cuda(x.device)
+        previous_box = torch.zeros(batch_size, 4).cuda(x.device)
 
         all_class_loss = 0
         all_bbox_loss = 0
         all_reg_loss = 0
 
-        anchors = self.anchors(img_batch)
-
-        if self.all_box_regression:
-            regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
-            regression_loss = self.regLoss(regression, anchors, annotations)
-
         if not self.training:
             noun_predicts = []
             bbox_predicts = []
 
-        for i in range(1):
+
+        for i in range(2):
             rnn_input = torch.cat((image_predict, previous_word, previous_box), dim=1)
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
 
             features = [feature * rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
+            regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
 
-            if not self.all_box_regression:
-                regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
             classifications = []
             bbox_distributions = []
+
             for feature in features:
                 classication = self.classificationModel(feature)
-                bbox_distributions.append(classication[0])
-                classifications.append(classication[1].unsqueeze(2))
+                #bbox_distributions.append(classication[1])
+                classifications.append(classication)
 
-            classification = torch.cat([c for c in classifications], dim=2)
-            classification = classification.mean(dim=2)
-            classification_guess = torch.argmax(classification, dim=1)
+            classification = torch.cat([c for c in classifications], dim=1)
+
+            best_per_box = torch.max(classification, dim=2)[0]
+            best_bbox = torch.argmax(best_per_box, dim=1)
+
+            #classification_guess = torch.argmax(classification, dim=1)
+            class_boxes = classification[torch.arange(batch_size), best_bbox, :]
+            classification_guess = torch.argmax(class_boxes, dim=1)
             previous_word = self.noun_embedding(classification_guess)
 
-            boxes = torch.cat([b for b in bbox_distributions], dim=1)
-            best_bbox = torch.argmax(boxes, dim=1)
-            previous_box = regression[torch.arange(batch_size), best_bbox.view(-1), :]
+            #boxes = torch.cat([b for b in bbox_distributions], dim=1)
+            #best_bbox = torch.argmax(boxes, dim=1)
+            #pdb.set_trace()
+            #previous_box = regression[torch.arange(batch_size), best_bbox.view(-1), :]
 
             if self.training:
                 anns = annotations[:, i, :].unsqueeze(1)
-                class_loss, bbox_loss, reg_loss = self.focalLoss(classification, regression, boxes, anchors, anns)
+                #class_loss, reg_loss, bbox_loss = self.focalLoss(classification, regression, anchors, anns)
+                class_loss, reg_loss = self.focalLoss(classification, regression, anchors, anns)
+
                 all_class_loss += class_loss
-                all_bbox_loss += bbox_loss
+                #all_bbox_loss += bbox_loss
                 all_reg_loss += reg_loss
             else:
-                #pdb.set_trace()
-                noun_predicts.append(torch.argmax(classification, dim=1))
-                best_bbox = torch.argmax(boxes, dim=1)
-                #pdb.set_trace()
+                #noun_predicts.append(torch.argmax(classification, dim=1))
+                #best_bbox = torch.argmax(boxes, dim=1)
                 transformed_anchors = self.regressBoxes(anchors, regression)
                 transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
                 bbox_predicts.append(transformed_anchors[torch.arange(batch_size), best_bbox, :])
-                pdb.set_trace()
+                class_boxes = classification[torch.arange(batch_size), best_bbox, :]
+                noun_predicts.append(torch.argmax(class_boxes, dim=1))
+                #pdb.set_trace()
                 #bbox_predicts.append(regression[torch.arange(batch_size), 0, :])
 
 
         if self.training:
-            if self.all_box_regression:
-                reg_loss = regression_loss
-            else:
-                reg_loss = all_reg_loss / 6.0
-            return all_class_loss, reg_loss, all_bbox_loss / 6.0, verb_loss
+            #return all_class_loss, all_reg_loss, all_bbox_loss, verb_loss
+            return all_class_loss, all_reg_loss, verb_loss
         else:
             return verb_guess, noun_predicts, bbox_predicts
 

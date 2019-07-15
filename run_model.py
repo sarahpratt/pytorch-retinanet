@@ -95,6 +95,7 @@ def main(args=None):
     with open('./imsitu_space.json') as f:
         all = json.load(f)
         verb_orders = all['verbs']
+        all_idx_to_english = all['nouns']
 
     print("loading model")
     # Create the model
@@ -139,7 +140,7 @@ def main(args=None):
 
     print('Num training images: {}'.format(len(dataset_train)))
 
-    x = torch.load('./retinanet_6.pth')
+    x = torch.load('./retinanet_89.pth')
     retinanet.module.load_state_dict(x)
 
     evaluator = BboxEval()
@@ -159,15 +160,20 @@ def main(args=None):
             verb = dataset_train.idx_to_verb[verb_guess[i]]
             nouns = []
             bboxes = []
-            for j in range(1):
-                nouns.append(dataset_train.idx_to_class[noun_predicts[j][i]])
+            for j in range(2):
+                #pdb.set_trace()
+                if dataset_train.idx_to_class[noun_predicts[j][i]] == 'not':
+                    nouns.append('')
+                else:
+                    nouns.append(dataset_train.idx_to_class[noun_predicts[j][i]])
                 bboxes.append(bbox_predicts[j][i]/data['scale'][i])
             verb_gt, nouns_gt, boxes_gt = get_ground_truth(image, dev_gt[image], verb_orders)
             #scale = data['scale'][0]
+            #pdb.set_trace()
             evaluator.update(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders)
-            evaluator.visualize(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders, image)
+            #evaluator.visualize(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders, image, all_idx_to_english)
 
-    # pdb.set_trace()
+    pdb.set_trace()
     writer.add_scalar("val/verb_acc", evaluator.verb(), 1)
     writer.add_scalar("val/value", evaluator.value(), 1)
     writer.add_scalar("val/value_all", evaluator.value_all(), 1)
@@ -181,22 +187,24 @@ def main(args=None):
 
 
 def get_ground_truth(image, image_info, verb_orders):
-    verb = image.split("_")[0]
-    nouns = []
-    bboxes = []
-    role = "agent"
-    if role in verb_orders[verb]["order"]:
-        # for role in verb_orders[verb]["order"]:
-        all_options = set()
-        for i in range(3):
-            all_options.add(image_info["frames"][i][role])
-        nouns.append(all_options)
-        if image_info["bb"][role][0] == -1:
-            bboxes.append(None)
-        else:
-            b = [int(i) for i in image_info["bb"][role]]
-            bboxes.append(b)
-    return verb, nouns, bboxes
+	verb = image.split("_")[0]
+	nouns = []
+	bboxes = []
+	roles = ["agent", "tool"]
+	#roles = ["agent"]
+	if "agent" in verb_orders[verb]["order"] and "tool" in verb_orders[verb]["order"]:
+		#for role in verb_orders[verb]["order"]:
+		for role in roles:
+			all_options = set()
+			for i in range(3):
+				all_options.add(image_info["frames"][i][role])
+			nouns.append(all_options)
+			if image_info["bb"][role][0] == -1:
+				bboxes.append(None)
+			else:
+				b = [int(i) for i in image_info["bb"][role]]
+				bboxes.append(b)
+	return verb, nouns, bboxes
 
 
 if __name__ == '__main__':
