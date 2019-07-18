@@ -137,11 +137,11 @@ def main(args=None):
 			annotations = data['annot'].cuda().float()
 			verbs = data['verb_idx'].cuda()
 			#class_loss, reg_loss, bbox_loss, verb_loss = retinanet([image, annotations, verbs])
-			class_loss, reg_loss, verb_loss = retinanet([image, annotations, verbs])
+			class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs])
 
 			avg_class_loss += class_loss.mean().item()
 			avg_reg_loss += reg_loss.mean().item()
-			#avg_bbox_loss += bbox_loss.mean().item()
+			avg_bbox_loss += bbox_loss.mean().item()
 			avg_verb_loss += verb_loss.mean().item()
 
 			if i % 100 == 0:
@@ -153,8 +153,8 @@ def main(args=None):
 								  epoch_num * len(dataloader_train) + i)
 				writer.add_scalar("train/regression_loss", avg_reg_loss / 100,
 								  epoch_num * (len(dataloader_train)) + i)
-				# writer.add_scalar("train/bbox_loss", avg_bbox_loss / 100,
-				# 				  epoch_num * (len(dataloader_train)) + i)
+				writer.add_scalar("train/bbox_loss", avg_bbox_loss / 100,
+								  epoch_num * (len(dataloader_train)) + i)
 				writer.add_scalar("train/verb_loss", avg_verb_loss / 100,
 								  epoch_num * (len(dataloader_train)) + i)
 
@@ -163,9 +163,9 @@ def main(args=None):
 				avg_bbox_loss = 0.0
 				avg_verb_loss = 0.0
 
-			#loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
 
-			loss = class_loss.mean() + reg_loss.mean() + verb_loss.mean()
+			#loss = class_loss.mean() + reg_loss.mean() + verb_loss.mean()
 
 			epoch_loss.append(loss)
 			#loss = verb_loss.mean() + class_loss.mean()
@@ -192,7 +192,7 @@ def main(args=None):
 				x = data['img'].cuda().float()
 				y = data['verb_idx'].cuda()
 
-				verb_guess, noun_predicts, bbox_predicts = retinanet([x, y])
+				verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y])
 				for i in range(len(verb_guess)):
 					image = data['img_name'][i].split('/')[-1]
 					verb = dataset_train.idx_to_verb[verb_guess[i]]
@@ -203,7 +203,10 @@ def main(args=None):
 							nouns.append('')
 						else:
 							nouns.append(dataset_train.idx_to_class[noun_predicts[j][i]])
-						bboxes.append(bbox_predicts[j][i] / data['scale'][i])
+						if bbox_exists[j][i] > 0.5:
+							bboxes.append(bbox_predicts[j][i] / data['scale'][i])
+						else:
+							bboxes.append(None)
 					verb_gt, nouns_gt, boxes_gt = get_ground_truth(image, dev_gt[image], verb_orders)
 					evaluator.update(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders)
 

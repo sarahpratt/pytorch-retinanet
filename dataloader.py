@@ -133,8 +133,6 @@ class CSVDataset(Dataset):
         verb = verb.split('_')[0]
         verb_idx = self.verb_to_idx[verb]
         sample = {'img': img, 'annot': annot, 'img_name': self.image_names[idx], 'verb_idx': verb_idx}
-        if self.is_visualizing:
-            sample['is_visualizing'] = True
         if self.transform:
             sample = self.transform(sample)
         return sample
@@ -287,14 +285,6 @@ def collater(data):
 
 
     padded_imgs = padded_imgs.permute(0, 3, 1, 2)
-    if 'no_norm' in data[0]:
-        no_norm_imgs = [s['no_norm'] for s in data]
-        padded_imgs_no_norm = torch.zeros(batch_size, max_width, max_height, 3)
-        for i in range(batch_size):
-            no_norm_img = no_norm_imgs[i]
-            padded_imgs_no_norm[i, :int(no_norm_img.shape[0]), :int(no_norm_img.shape[1]), :] = torch.Tensor(no_norm_img)
-
-        return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales, 'img_name': img_names, 'no_norm': padded_imgs_no_norm, 'verb_idx': verb_indices}
 
     return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales, 'img_name': img_names, 'verb_idx': verb_indices}
 
@@ -329,12 +319,7 @@ class Resizer(object):
         new_image[:rows, :cols, :] = image.astype(np.float32)
 
         annots[:, :4][annots[:, :4] > 0] *= scale
-        if 'no_norm' in sample:
-            no_norm_image = sample['no_norm']
-            no_norm_image = skimage.transform.resize(no_norm_image, (int(round(rows_orig * scale)), int(round((cols_orig * scale)))))
-            new_image_no_norm = np.zeros((rows + pad_w, cols + pad_h, cns)).astype(np.float32)
-            new_image_no_norm[:rows, :cols, :] = no_norm_image.astype(np.float32)
-            return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale, 'img_name': sample['img_name'], 'no_norm': new_image_no_norm, 'verb_idx': sample['verb_idx']}
+
         return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale, 'img_name': image_name, 'verb_idx': sample['verb_idx']}
 
 
@@ -372,8 +357,6 @@ class Normalizer(object):
 
         image, annots = sample['img'], sample['annot']
 
-        if 'is_visualizing' in sample:
-            return {'img': ((image.astype(np.float32) - self.mean) / self.std), 'annot': annots, 'img_name': sample['img_name'], 'no_norm': image.astype(np.float32), 'verb_idx': sample['verb_idx']}
         return {'img':((image.astype(np.float32)-self.mean)/self.std), 'annot': annots, 'img_name': sample['img_name'], 'verb_idx': sample['verb_idx']}
 
 class UnNormalizer(object):
