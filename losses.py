@@ -48,8 +48,6 @@ class FocalLoss(nn.Module):
             classification = classifications[j, :, :]
             regression = regressions[j, :, :]
 
-            #pdb.set_trace()
-
             bbox_annotation = annotations[j, :, :]
             bbox_annotation = bbox_annotation[bbox_annotation[:, 4] != -1]
 
@@ -58,12 +56,11 @@ class FocalLoss(nn.Module):
                 bbox_exists = False
 
             if bbox_exists:
-                bbox_loss = -torch.log(bbox_exist_prediction[j])
+                bbox_binary_target = torch.ones_like(bbox_exist_prediction[j])
             else:
-                bbox_loss = -torch.log(1 - bbox_exist_prediction[j])
-
+                bbox_binary_target = torch.zeros_like(bbox_exist_prediction[j])
+            bbox_loss = F.binary_cross_entropy_with_logits(bbox_exist_prediction[j], bbox_binary_target)
             bbox_losses.append(bbox_loss)
-
 
             if bbox_annotation.shape[0] == 0:
                 regression_losses.append(torch.tensor(0).float().cuda())

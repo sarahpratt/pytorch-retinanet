@@ -7,6 +7,7 @@ from utils import BasicBlock, Bottleneck, BBoxTransform, ClipBoxes
 from anchors import Anchors
 import losses
 from lib.nms.pth_nms import pth_nms
+import torch.nn.functional as F
 import pdb
 
 def nms(dets, thresh):
@@ -131,7 +132,7 @@ class ClassificationModel(nn.Module):
 
         self.pool = torch.nn.AdaptiveMaxPool2d((1, 1))
         self.features_linear = nn.Linear(feature_size, 1)
-        self.act_binary = nn.Sigmoid()
+        #self.act_binary = nn.Sigmoid()
 
         self.output_retina = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
         self.output_act_retina = nn.Sigmoid()
@@ -149,7 +150,7 @@ class ClassificationModel(nn.Module):
         # BBox Binary Logit
         bbox_exists = self.pool(out).squeeze()
         bbox_exists = self.features_linear(bbox_exists)
-        bbox_exists = self.act_binary(bbox_exists)
+        #bbox_exists = self.act_binary(bbox_exists)
 
         # Classification Branch
         out = self.act4(out)
@@ -308,6 +309,7 @@ class ResNet(nn.Module):
                 classifications.append(classication[0])
 
             bbox_exist = torch.cat([c for c in bbox_exist], dim=1)
+            #pdb.set_trace()
             bbox_exist = torch.max(bbox_exist, dim=1)[0]
 
             # get max from K x A x W x H to get max classificiation and bbox
@@ -331,6 +333,7 @@ class ResNet(nn.Module):
                 bbox_predicts.append(transformed_anchors[torch.arange(batch_size), best_bbox, :])
                 class_boxes = classification[torch.arange(batch_size), best_bbox, :]
                 noun_predicts.append(torch.argmax(class_boxes, dim=1))
+                bbox_exist = torch.sigmoid(bbox_exist)
                 bbox_exist_list.append(bbox_exist)
 
         if self.training:
