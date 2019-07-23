@@ -6,6 +6,12 @@ RUN pip install torch==0.4.1
 RUN pip install torchvision==0.2.1
 RUN pip install tensorflow
 RUN pip install tensorboardx
+RUN pip install streamlit
+RUN mkdir -p /root/.streamlit && \
+    echo '[server]\nenableCORS = false' > /root/.streamlit/config.toml && \
+    echo '[general]\nemail = "random@user.com"' > /root/.streamlit/credentials.toml
+EXPOSE 8501
+#ENTRYPOINT ["streamlit", "run"]
 COPY install_nvidia.sh /root/install_nvidia.sh
 RUN /root/install_nvidia.sh
 CMD /bin/bash

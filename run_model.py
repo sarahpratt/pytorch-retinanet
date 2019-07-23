@@ -171,7 +171,8 @@ def main(args=None):
             #scale = data['scale'][0]
             #pdb.set_trace()
             evaluator.update(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders)
-            #evaluator.visualize(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders, image, all_idx_to_english)
+            image_file = evaluator.visualize(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders, image, all_idx_to_english)
+            image_file.save('./predictions/' + image)
 
     pdb.set_trace()
     writer.add_scalar("val/verb_acc", evaluator.verb(), 1)

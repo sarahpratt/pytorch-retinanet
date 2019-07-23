@@ -61,8 +61,8 @@ class BboxEval:
 
 
     def update(self, pred_verb, pred_nouns, pred_bboxes, gt_verb, gt_nouns, gt_bboxes, verb_order):
-        #order = verb_order[gt_verb]["order"]
-        order = ["agent", "tool"]
+        order = verb_order[gt_verb]["order"]
+        #order = ["agent", "tool"]
 
         self.all_verbs += 1.0
         self.per_verb_occ[gt_verb] += 1.0
@@ -90,8 +90,9 @@ class BboxEval:
             self.per_verb_all_correct_bboxes[gt_verb] += value_all_bbox
             self.per_verb_all_correct[gt_verb] += value_all
 
+
     def visualize(self, pred_verb, pred_nouns, pred_bboxes, gt_verb, gt_nouns, gt_bboxes, verb_order, image, word_dict):
-        verb_order = ['agent', 'tool']
+        verb_order = verb_order[gt_verb]["order"]
 
         img = Image.open('./images_512/' + image)
         img = np.float32(img)
@@ -145,8 +146,64 @@ class BboxEval:
         img_gt = Image.fromarray(np.uint8(img_gt))
         new_im.paste(img_gt, box=(200, 0))
         new_im.paste(img, box=(400 + width, 0))
+        return new_im
 
-        new_im.save('./predictions/' + image)
+        #new_im.save('./predictions/' + image)
+
+
+    def visualize_for_demo(self, bboxes, image, colors):
+
+        img = Image.open('./images_512/' + image)
+        img = np.float32(img)
+
+        color_idx = 0
+        for b in bboxes:
+            if b is not None and b[0] != -1:
+                cv2.rectangle(img, (b[0], b[1]), (b[2], b[3]), colors[color_idx], 3)
+            color_idx += 1
+
+        img = Image.fromarray(np.uint8(img))
+        return img
+
+    def visualize_words_for_demo(self, order, verb_gt, nouns, color, word_dict):
+
+        new_im = Image.new('RGB', (800, 180))
+        new_im = np.float32(new_im)
+
+        cv2.putText(new_im, verb_gt, (10, 30), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 255), 2)
+
+        for i in range(len(order)):
+            text = str(order[i])
+            for noun in nouns[i]:
+                if noun in word_dict:
+                    w = word_dict[noun]['gloss'][0]
+                else:
+                    w = noun
+                text += ", " + str(w)
+            cv2.putText(new_im, text, (10, 20*(i+1) + 40), cv2.FONT_HERSHEY_PLAIN, 1.5, color[i], 1)
+
+        new_im = Image.fromarray(np.uint8(new_im))
+        return new_im
+
+    def visualize_words_for_demo_pred(self, order, verb_gt, nouns, color, word_dict):
+
+        new_im = Image.new('RGB', (800, 180))
+        new_im = np.float32(new_im)
+
+        cv2.putText(new_im, verb_gt, (10, 30), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 255), 2)
+
+        for i in range(len(order)):
+            text = str(order[i])
+            if nouns[i] in word_dict:
+                w = word_dict[nouns[i]]['gloss'][0]
+            else:
+                w = nouns[i]
+            text += ", " + str(w)
+            cv2.putText(new_im, text, (10, 20*(i+1) + 40), cv2.FONT_HERSHEY_PLAIN, 1.5, color[i], 1)
+
+        new_im = Image.fromarray(np.uint8(new_im))
+        return new_im
+
 
     def bb_intersection_over_union(self, boxA, boxB):
         if boxA is None and boxB is None:

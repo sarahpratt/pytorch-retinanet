@@ -250,6 +250,7 @@ class ResNet(nn.Module):
         else:
             img_batch, verb = inputs
 
+
         batch_size = img_batch.shape[0]
 
         # Extract Visual Features
@@ -270,8 +271,12 @@ class ResNet(nn.Module):
         verb_predict = self.fc(image_predict)
         verb_guess = torch.argmax(verb_predict, dim=1)
 
+
         verb_loss = self.loss_function(verb_predict, verb)
-        previous_word = self.verb_embeding(verb_guess)
+        if self.training:
+            previous_word = self.verb_embeding(verb)
+        else:
+            previous_word = self.verb_embeding(verb_guess)
 
         # Get feature pyramid
         features = self.fpn([x2, x3, x4])
@@ -287,12 +292,13 @@ class ResNet(nn.Module):
         all_bbox_loss = 0
         all_reg_loss = 0
 
+
         if not self.training:
             noun_predicts = []
             bbox_predicts = []
             bbox_exist_list = []
 
-        for i in range(2):
+        for i in range(6):
             rnn_input = torch.cat((image_predict, previous_word, previous_box), dim=1)
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
@@ -308,9 +314,13 @@ class ResNet(nn.Module):
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
 
+
+            if len(bbox_exist[0].shape) == 1:
+                bbox_exist = [c.unsqueeze(0) for c in bbox_exist]
+
             bbox_exist = torch.cat([c for c in bbox_exist], dim=1)
-            #pdb.set_trace()
             bbox_exist = torch.max(bbox_exist, dim=1)[0]
+
 
             # get max from K x A x W x H to get max classificiation and bbox
             classification = torch.cat([c for c in classifications], dim=1)
@@ -319,6 +329,7 @@ class ResNet(nn.Module):
 
             class_boxes = classification[torch.arange(batch_size), best_bbox, :]
             classification_guess = torch.argmax(class_boxes, dim=1)
+
             previous_word = self.noun_embedding(classification_guess)
 
             if self.training:

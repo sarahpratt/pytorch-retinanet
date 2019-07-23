@@ -70,6 +70,14 @@ class CSVDataset(Dataset):
                 self.verb_to_idx[verb] = k
                 k += 1
 
+        self.image_to_image_idx = {}
+        i = 0
+        for image_name in self.image_names:
+            self.image_to_image_idx[image_name] = i
+            i += 1
+
+
+
     def _parse(self, value, function, fmt):
         """
         Parse a string into a value, and format a nice ValueError if it fails.

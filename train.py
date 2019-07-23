@@ -110,13 +110,10 @@ def main(args=None):
 
 	print('Num training images: {}'.format(len(dataset_train)))
 
-	#if parser.resume_model:
-	#x = torch.load('~/pytorch-retinanet/runs/JUST_VERB_AGENT_2/checkpoints/retinanet_3.pth')
-	#retinanet.module.load_state_dict(x)
+	# x = torch.load('./runs/full/checkpoints/retinanet_0.pth')
+	# retinanet.module.load_state_dict(x)
 
-
-	#for epoch_num in range(parser.resume_epoch, parser.epochs):
-	for epoch_num in range(0, parser.epochs):
+	for epoch_num in range(parser.resume_epoch, parser.epochs):
 
 		retinanet.train()
 		retinanet.module.freeze_bn()
@@ -136,7 +133,6 @@ def main(args=None):
 			image = data['img'].cuda().float()
 			annotations = data['annot'].cuda().float()
 			verbs = data['verb_idx'].cuda()
-			#class_loss, reg_loss, bbox_loss, verb_loss = retinanet([image, annotations, verbs])
 			class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs])
 
 			avg_class_loss += class_loss.mean().item()
@@ -165,10 +161,7 @@ def main(args=None):
 
 			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
 
-			#loss = class_loss.mean() + reg_loss.mean() + verb_loss.mean()
-
 			epoch_loss.append(loss)
-			#loss = verb_loss.mean() + class_loss.mean()
 
 			if bool(loss == 0):
 				continue
@@ -198,7 +191,7 @@ def main(args=None):
 					verb = dataset_train.idx_to_verb[verb_guess[i]]
 					nouns = []
 					bboxes = []
-					for j in range(2):
+					for j in range(6):
 						if dataset_train.idx_to_class[noun_predicts[j][i]] == 'not':
 							nouns.append('')
 						else:
@@ -225,20 +218,16 @@ def get_ground_truth(image, image_info, verb_orders):
 	verb = image.split("_")[0]
 	nouns = []
 	bboxes = []
-	roles = ["agent", "tool"]
-	#roles = ["agent"]
-	if "agent" in verb_orders[verb]["order"] and "tool" in verb_orders[verb]["order"]:
-		#for role in verb_orders[verb]["order"]:
-		for role in roles:
-			all_options = set()
-			for i in range(3):
-				all_options.add(image_info["frames"][i][role])
-			nouns.append(all_options)
-			if image_info["bb"][role][0] == -1:
-				bboxes.append(None)
-			else:
-				b = [int(i) for i in image_info["bb"][role]]
-				bboxes.append(b)
+	for role in verb_orders[verb]["order"]:
+		all_options = set()
+		for i in range(3):
+			all_options.add(image_info["frames"][i][role])
+		nouns.append(all_options)
+		if image_info["bb"][role][0] == -1:
+			bboxes.append(None)
+		else:
+			b = [int(i) for i in image_info["bb"][role]]
+			bboxes.append(b)
 	return verb, nouns, bboxes
 
 if __name__ == '__main__':
