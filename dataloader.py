@@ -134,7 +134,6 @@ class CSVDataset(Dataset):
         #return 100
 
     def __getitem__(self, idx):
-
         img = self.load_image(idx)
         annot = self.load_annotations(idx)
         verb = self.image_names[idx].split('/')[2]
@@ -168,10 +167,10 @@ class CSVDataset(Dataset):
         # parse annotations
         for idx, a in enumerate(annotation_list):
             # some annotations have basically no width / height, skip them
-            x1 = a['x1']
-            x2 = a['x2']
-            y1 = a['y1']
-            y2 = a['y2']
+            x1 = a['x1']/2.0 #SARAH - dividing these
+            x2 = a['x2']/2.0
+            y1 = a['y1']/2.0
+            y2 = a['y2']/2.0
 
             #if (x2-x1) < 1 or (y2-y1) < 1:
             #    continue
@@ -266,6 +265,7 @@ def collater(data):
 
     widths = [int(s.shape[0]) for s in imgs]
     heights = [int(s.shape[1]) for s in imgs]
+
     batch_size = len(imgs)
 
     max_width = np.array(widths).max()
@@ -294,12 +294,12 @@ def collater(data):
 
     padded_imgs = padded_imgs.permute(0, 3, 1, 2)
 
-    return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales, 'img_name': img_names, 'verb_idx': verb_indices}
+    return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales, 'img_name': img_names, 'verb_idx': verb_indices, 'widths': torch.tensor(widths).float(), 'heights': torch.tensor(heights).float()}
 
 class Resizer(object):
     """Convert ndarrays in sample to Tensors."""
 
-    def __call__(self, sample, min_side=608, max_side=1024):
+    def __call__(self, sample, min_side=608, max_side=1000):
         image, annots, image_name = sample['img'], sample['annot'], sample['img_name']
 
         rows_orig, cols_orig, cns_orig = image.shape

@@ -2,6 +2,7 @@ import os
 import argparse
 import pdb
 import json
+import time
 import random
 
 import numpy as np
@@ -67,11 +68,11 @@ def main(args=None):
 		dataset_val = CSVDataset(train_file=parser.val_file, class_list=parser.classes_file, transform=transforms.Compose([Normalizer(), Resizer()]))
 
 	sampler = AspectRatioBasedSampler(dataset_train, batch_size=parser.batch_size, drop_last=True)
-	dataloader_train = DataLoader(dataset_train, num_workers=8, collate_fn=collater, batch_sampler=sampler)
+	dataloader_train = DataLoader(dataset_train, num_workers=64, collate_fn=collater, batch_sampler=sampler)
 
 	if dataset_val is not None:
 		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=parser.batch_size, drop_last=True)
-		dataloader_val = DataLoader(dataset_val, num_workers=8, collate_fn=collater, batch_sampler=sampler_val)
+		dataloader_val = DataLoader(dataset_val, num_workers=64, collate_fn=collater, batch_sampler=sampler_val)
 
 	print("loading dev")
 	with open('./dev.json') as f:
@@ -96,10 +97,10 @@ def main(args=None):
 	else:
 		raise ValueError('Unsupported model depth, must be one of 18, 34, 50, 101, 152')
 
-	use_gpu = True
+	# use_gpu = True
 
-	if use_gpu:
-		retinanet = retinanet.cuda()
+	# if use_gpu:
+	# 	retinanet = retinanet.cuda()
 
 	retinanet = torch.nn.DataParallel(retinanet).cuda()
 	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
@@ -110,8 +111,9 @@ def main(args=None):
 
 	print('Num training images: {}'.format(len(dataset_train)))
 
-	# x = torch.load('./runs/full/checkpoints/retinanet_0.pth')
+	# x = torch.load('./runs/just_gt_nouns_2/checkpoints/retinanet_0.pth')
 	# retinanet.module.load_state_dict(x)
+	# parser.resume_epoch = 1
 
 	for epoch_num in range(parser.resume_epoch, parser.epochs):
 
@@ -126,21 +128,41 @@ def main(args=None):
 		avg_verb_loss = 0.0
 		retinanet.training = True
 
+		now = time.time()
+
+		all_data_time = 0.0
+		all_model_time = 0.0
+		all_backward_time = 0.0
+		all_time = 0.0
+
 		for iter_num, data in enumerate(dataloader_train):
 			i += 1
+
+			if i > 100:
+				exit()
 
 			optimizer.zero_grad()
 			image = data['img'].cuda().float()
 			annotations = data['annot'].cuda().float()
 			verbs = data['verb_idx'].cuda()
-			class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs])
+			widths = data['widths'].cuda()
+			heights = data['heights'].cuda()
+
+			all_data_time += time.time() - now
+			now1 = time.time()
+
+			class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs, widths, heights])
+
+			all_model_time += time.time() - now1
+			now1 = time.time()
 
 			avg_class_loss += class_loss.mean().item()
 			avg_reg_loss += reg_loss.mean().item()
 			avg_bbox_loss += bbox_loss.mean().item()
 			avg_verb_loss += verb_loss.mean().item()
 
-			if i % 100 == 0:
+
+			if i % 10 == 0:
 				print(
 					'Epoch: {} | Iteration: {} | Class loss: {:1.5f} | Reg loss: {:1.5f} | Verb loss: {:1.5f} | Box loss: {:1.5f}'.format(
 						epoch_num, iter_num, float(avg_class_loss/100), float(avg_reg_loss/100),
@@ -158,16 +180,39 @@ def main(args=None):
 				avg_reg_loss = 0.0
 				avg_bbox_loss = 0.0
 				avg_verb_loss = 0.0
+				# print(time.time() - now)
+				# now = time.time()
+
+				# print("data")
+				# print(all_data_time/10.0)
+				# print("model")
+				# print(all_model_time / 10.0)
+				# print("backward")
+				# print(all_backward_time / 10.0)
+				# print("all")
+				# print(all_time / 10.0)
+
+				all_data_time = 0.0
+				all_model_time = 0.0
+				all_backward_time = 0.0
+				all_time = 0.0
 
 			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
 
-			epoch_loss.append(loss)
+			#epoch_loss.append(loss)
 
 			if bool(loss == 0):
 				continue
 			loss.backward()
 			torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
 			optimizer.step()
+
+			all_backward_time +=  time.time() - now1
+
+			all_time += time.time() - now
+
+			now = time.time()
+
 
 		torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
 
@@ -184,8 +229,10 @@ def main(args=None):
 				k += 1
 				x = data['img'].cuda().float()
 				y = data['verb_idx'].cuda()
+				widths = data['widths'].cuda()
+				heights = data['heights'].cuda()
 
-				verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y])
+				verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights])
 				for i in range(len(verb_guess)):
 					image = data['img_name'][i].split('/')[-1]
 					verb = dataset_train.idx_to_verb[verb_guess[i]]
@@ -209,8 +256,8 @@ def main(args=None):
 			writer.add_scalar("val/value_bbox", evaluator.value_bbox(), epoch_num)
 			writer.add_scalar("val/value_all_bbox", evaluator.value_all_bbox(), epoch_num)
 
-		epoch_loss = torch.Tensor(epoch_loss)
-		scheduler.step(epoch_loss.mean())
+		#epoch_loss = torch.Tensor(epoch_loss)
+		#scheduler.step(epoch_loss.mean())
 	retinanet.eval()
 	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
 

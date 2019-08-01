@@ -165,7 +165,7 @@ class ClassificationModel(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, num_classes, block, layers):
+    def __init__(self, num_classes, block, layers, bbox_embedding=True):
         self.inplanes = 64
         super(ResNet, self).__init__()
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
@@ -190,6 +190,7 @@ class ResNet(nn.Module):
         self.regressBoxes = BBoxTransform()
         self.clipBoxes = ClipBoxes()
         self.focalLoss = losses.FocalLoss()
+        self.bbox_embedding = bbox_embedding
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -205,7 +206,14 @@ class ResNet(nn.Module):
 
         self.verb_embeding = nn.Embedding(504, 512)
         self.noun_embedding = nn.Embedding(num_classes, 512)
-        self.rnn = nn.LSTMCell(2048 + 512 + 4, 1024)
+
+        self.bbox_width_embed = nn.Embedding(11, 16)
+        self.bbox_height_embed = nn.Embedding(11, 16)
+        self.bbox_x_embed = nn.Embedding(11, 16)
+        self.bbox_y_embed = nn.Embedding(11, 16)
+
+        self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024)
+
         self.rnn_linear = nn.Linear(1024, 256)
 
         prior = 0.01
@@ -219,6 +227,7 @@ class ResNet(nn.Module):
         self.freeze_bn()
         self.loss_function = nn.CrossEntropyLoss()
         self.all_box_regression = False
+
 
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
@@ -246,12 +255,13 @@ class ResNet(nn.Module):
     def forward(self, inputs, return_all_scores=False):
 
         if self.training:
-            img_batch, annotations, verb = inputs
+            img_batch, annotations, verb, widths, heights = inputs
         else:
-            img_batch, verb = inputs
-
+            img_batch, verb, widths, heights = inputs
 
         batch_size = img_batch.shape[0]
+
+        now = time.time()
 
         # Extract Visual Features
         x = self.conv1(img_batch)
@@ -260,9 +270,13 @@ class ResNet(nn.Module):
         x = self.maxpool(x)
 
         x1 = self.layer1(x)
-        x2 = self.layer2(x1)
-        x3 = self.layer3(x2)
-        x4 = self.layer4(x3)
+        x2 = self.layer2(x1).detach()
+        x3 = self.layer3(x2).detach()
+        x4 = self.layer4(x3).detach()
+
+        print("resnet")
+        print(time.time() - now)
+        now = time.time()
 
         image_predict = self.avgpool(x4)
         image_predict = image_predict.squeeze()
@@ -271,10 +285,9 @@ class ResNet(nn.Module):
         verb_predict = self.fc(image_predict)
         verb_guess = torch.argmax(verb_predict, dim=1)
 
-
         verb_loss = self.loss_function(verb_predict, verb)
         if self.training:
-            previous_word = self.verb_embeding(verb)
+            previous_word = self.verb_embeding(verb.long())
         else:
             previous_word = self.verb_embeding(verb_guess)
 
@@ -285,34 +298,47 @@ class ResNet(nn.Module):
 
         # init LSTM inputs
         hx, cx = torch.zeros(batch_size, 1024).cuda(x.device), torch.zeros(batch_size, 1024).cuda(x.device)
-        previous_box = torch.zeros(batch_size, 4).cuda(x.device)
+        previous_box_embed = torch.zeros(batch_size, 64).cuda(x.device)
 
         # init losses
         all_class_loss = 0
         all_bbox_loss = 0
         all_reg_loss = 0
 
-
         if not self.training:
             noun_predicts = []
             bbox_predicts = []
             bbox_exist_list = []
 
+        lstm_time = 0.0
+        reg_class_time = 0.0
+        other_time = 0.0
+
+
         for i in range(6):
-            rnn_input = torch.cat((image_predict, previous_word, previous_box), dim=1)
+            now = time.time()
+            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
 
+            lstm_time += time.time() - now
+            now = time.time()
+
             features = [feature * rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
             regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
-
+            reg_class_time += time.time() - now
             classifications = []
             bbox_exist = []
+
+            #now = time.time()
 
             for feature in features:
                 classication = self.classificationModel(feature)
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
+
+
+            now = time.time()
 
 
             if len(bbox_exist[0].shape) == 1:
@@ -327,25 +353,77 @@ class ResNet(nn.Module):
             best_per_box = torch.max(classification, dim=2)[0]
             best_bbox = torch.argmax(best_per_box, dim=1)
 
+            now = time.time()
+
+
             class_boxes = classification[torch.arange(batch_size), best_bbox, :]
             classification_guess = torch.argmax(class_boxes, dim=1)
+            now = time.time()
 
-            previous_word = self.noun_embedding(classification_guess)
+            if self.training:
+                ground_truth_1 = self.noun_embedding(annotations[:, i, -1].long())
+                ground_truth_2 = self.noun_embedding(annotations[:, i, -2].long())
+                ground_truth_3 = self.noun_embedding(annotations[:, i, -3].long())
+                previous_word = torch.stack([ground_truth_1, ground_truth_2, ground_truth_3]).mean(dim=0)
+            else:
+                previous_word = self.noun_embedding(classification_guess)
+
+            other_time += time.time() - now
+
+
+            if self.training:
+                previous_boxes = annotations[:, i, :4]
+            else:
+                transformed_anchors = self.regressBoxes(anchors, regression)
+                transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
+                previous_boxes = transformed_anchors[torch.arange(batch_size), best_bbox, :]
+
+            # if self.bbox_embedding:
+            #     prev_heights = (previous_boxes[:, 2] - previous_boxes[:, 0])/heights
+            #     prev_widths = (previous_boxes[:, 3] - previous_boxes[:, 1])/widths
+            #     prev_ctr_y = previous_boxes[:, 0]/heights + 0.5 * prev_heights
+            #     prev_ctr_x = previous_boxes[:, 1]/widths + 0.5 * prev_widths
+            #
+            #     prev_widths = torch.ceil(prev_widths*10).long()
+            #     prev_heights = torch.ceil(prev_heights*10).long()
+            #     prev_ctr_x = torch.ceil(prev_ctr_x*10).long()
+            #     prev_ctr_y = torch.ceil(prev_ctr_y*10).long()
+            #
+            #     prev_widths = torch.clamp(prev_widths, 0, 10)
+            #     prev_heights = torch.clamp(prev_heights, 0, 10)
+            #     prev_ctr_x = torch.clamp(prev_ctr_x, 0, 10)
+            #     prev_ctr_y = torch.clamp(prev_ctr_y, 0, 10)
+
+                # if not self.training:
+                #     bbox_exist = torch.sigmoid(bbox_exist)
+                #     prev_widths[bbox_exist < 0.5] = 0
+                #     prev_heights[bbox_exist < 0.5] = 0
+                #     prev_ctr_x[bbox_exist < 0.5] = 0
+                #     prev_ctr_y[bbox_exist < 0.5] = 0
+
+                # previous_box_embed = torch.cat([self.bbox_width_embed(prev_widths), self.bbox_height_embed(prev_heights), self.bbox_x_embed(prev_ctr_x), self.bbox_y_embed(prev_ctr_y)], dim=1)
+
 
             if self.training:
                 anns = annotations[:, i, :].unsqueeze(1)
+                now = time.time()
                 class_loss, reg_loss, bbox_loss = self.focalLoss(classification, regression, anchors, bbox_exist, anns)
+                other_time += time.time() - now
                 all_class_loss += class_loss
                 all_reg_loss += reg_loss
                 all_bbox_loss += bbox_loss
             else:
-                transformed_anchors = self.regressBoxes(anchors, regression)
-                transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
-                bbox_predicts.append(transformed_anchors[torch.arange(batch_size), best_bbox, :])
-                class_boxes = classification[torch.arange(batch_size), best_bbox, :]
-                noun_predicts.append(torch.argmax(class_boxes, dim=1))
-                bbox_exist = torch.sigmoid(bbox_exist)
+                bbox_predicts.append(previous_boxes)
+                noun_predicts.append(classification_guess)
                 bbox_exist_list.append(bbox_exist)
+
+
+        # print("lstm")
+        # print(lstm_time)
+        print("reg_class")
+        print(reg_class_time)
+        # print("other")
+        # print(other_time)
 
         if self.training:
             return all_class_loss, all_reg_loss, verb_loss, all_bbox_loss
