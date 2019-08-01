@@ -138,9 +138,6 @@ def main(args=None):
 		for iter_num, data in enumerate(dataloader_train):
 			i += 1
 
-			if i > 100:
-				exit()
-
 			optimizer.zero_grad()
 			image = data['img'].cuda().float()
 			annotations = data['annot'].cuda().float()
@@ -162,7 +159,7 @@ def main(args=None):
 			avg_verb_loss += verb_loss.mean().item()
 
 
-			if i % 10 == 0:
+			if i % 100 == 0:
 				print(
 					'Epoch: {} | Iteration: {} | Class loss: {:1.5f} | Reg loss: {:1.5f} | Verb loss: {:1.5f} | Box loss: {:1.5f}'.format(
 						epoch_num, iter_num, float(avg_class_loss/100), float(avg_reg_loss/100),
@@ -204,7 +201,7 @@ def main(args=None):
 			if bool(loss == 0):
 				continue
 			loss.backward()
-			torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
+			torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 1, norm_type="inf")
 			optimizer.step()
 
 			all_backward_time +=  time.time() - now1

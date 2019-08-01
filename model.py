@@ -274,8 +274,8 @@ class ResNet(nn.Module):
         x3 = self.layer3(x2).detach()
         x4 = self.layer4(x3).detach()
 
-        print("resnet")
-        print(time.time() - now)
+        # print("resnet")
+        # print(time.time() - now)
         now = time.time()
 
         image_predict = self.avgpool(x4)
@@ -294,7 +294,8 @@ class ResNet(nn.Module):
         # Get feature pyramid
         features = self.fpn([x2, x3, x4])
         anchors = self.anchors(img_batch)
-        features.pop(0) #SARAH - remove feature batch
+        features = [features[2], features[4]]
+        #features.pop(0) #SARAH - remove feature batch
 
         # init LSTM inputs
         hx, cx = torch.zeros(batch_size, 1024).cuda(x.device), torch.zeros(batch_size, 1024).cuda(x.device)
@@ -420,8 +421,8 @@ class ResNet(nn.Module):
 
         # print("lstm")
         # print(lstm_time)
-        print("reg_class")
-        print(reg_class_time)
+        # print("reg_class")
+        # print(reg_class_time)
         # print("other")
         # print(other_time)
 
