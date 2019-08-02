@@ -111,8 +111,8 @@ def main(args=None):
 
 	print('Num training images: {}'.format(len(dataset_train)))
 
-	# x = torch.load('./runs/just_gt_nouns_2/checkpoints/retinanet_0.pth')
-	# retinanet.module.load_state_dict(x)
+	x = torch.load('./runs/verb_in_lstm/checkpoints/retinanet_23.pth')
+	retinanet.module.load_state_dict(x)
 	# parser.resume_epoch = 1
 
 	for epoch_num in range(parser.resume_epoch, parser.epochs):
@@ -195,6 +195,7 @@ def main(args=None):
 				all_time = 0.0
 
 			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
+			#loss = verb_loss.mean()
 
 			#epoch_loss.append(loss)
 
