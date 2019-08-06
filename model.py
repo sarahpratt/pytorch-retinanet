@@ -102,6 +102,7 @@ class RegressionModel(nn.Module):
         out = self.act2(out)
 
         out = self.conv3(out)
+        #out = out * rnn_feature_shape
         out = self.act3(out)
 
         out = self.conv4(out)
@@ -144,6 +145,7 @@ class ClassificationModel(nn.Module):
         out = self.conv2(out)
         out = self.act2(out)
         out = self.conv3(out)
+        #out = out * rnn_feature_shape
         out = self.act3(out)
         out = self.conv4(out)
 
@@ -184,8 +186,8 @@ class ResNet(nn.Module):
 
         self.fpn = PyramidFeatures(fpn_sizes[0], fpn_sizes[1], fpn_sizes[2])
 
-        self.regressionModel = RegressionModel(256)
-        self.classificationModel = ClassificationModel(256, num_classes=num_classes)
+        self.regressionModel = RegressionModel(512)
+        self.classificationModel = ClassificationModel(512, num_classes=num_classes)
         self.anchors = Anchors()
         self.regressBoxes = BBoxTransform()
         self.clipBoxes = ClipBoxes()
@@ -213,6 +215,10 @@ class ResNet(nn.Module):
         self.bbox_y_embed = nn.Embedding(11, 16)
 
         self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024)
+
+        for name, param in self.rnn.named_parameters():
+            if 'weight' in name:
+                nn.init.orthogonal_(param)
 
         self.rnn_linear = nn.Linear(1024, 256)
 
@@ -261,8 +267,6 @@ class ResNet(nn.Module):
 
         batch_size = img_batch.shape[0]
 
-        now = time.time()
-
         # Extract Visual Features
         x = self.conv1(img_batch)
         x = self.bn1(x)
@@ -273,10 +277,9 @@ class ResNet(nn.Module):
         x2 = self.layer2(x1).detach()
         x3 = self.layer3(x2).detach()
         x4 = self.layer4(x3).detach()
-
-        # print("resnet")
-        # print(time.time() - now)
-        now = time.time()
+        # x2 = self.layer2(x1)
+        # x3 = self.layer3(x2)
+        # x4 = self.layer4(x3)
 
         image_predict = self.avgpool(x4)
         image_predict = image_predict.squeeze()
@@ -286,8 +289,10 @@ class ResNet(nn.Module):
         # Get feature pyramid
         features = self.fpn([x2, x3, x4])
         anchors = self.anchors(img_batch)
-        features = [features[1], features[4]]
-        #features.pop(0) #SARAH - remove feature batch
+        #features = [features[1], features[4]]
+        #features = [features[1], features[2], features[3], features[4]]
+        #features = [features[0]]
+        features.pop(0) #SARAH - remove feature batch
 
         # init LSTM inputs
         hx, cx = torch.zeros(batch_size, 1024).cuda(x.device), torch.zeros(batch_size, 1024).cuda(x.device)
@@ -315,36 +320,23 @@ class ResNet(nn.Module):
             bbox_predicts = []
             bbox_exist_list = []
 
-        lstm_time = 0.0
-        reg_class_time = 0.0
-        other_time = 0.0
-
-
         for i in range(6):
-            now = time.time()
             rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
 
-            lstm_time += time.time() - now
-            now = time.time()
 
-            features = [feature * rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
-            regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
-            reg_class_time += time.time() - now
+            rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
+
+            #features = [feature * rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
+            regression = torch.cat([self.regressionModel(torch.cat((features[i], rnn_feature_shapes[i]), dim=1)) for i in range(len(features))], dim=1)
             classifications = []
             bbox_exist = []
 
-            #now = time.time()
-
-            for feature in features:
-                classication = self.classificationModel(feature)
+            for i in range(len(features)):
+                classication = self.classificationModel(torch.cat((features[i], rnn_feature_shapes[i]), dim=1))
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
-
-
-            now = time.time()
-
 
             if len(bbox_exist[0].shape) == 1:
                 bbox_exist = [c.unsqueeze(0) for c in bbox_exist]
@@ -352,18 +344,13 @@ class ResNet(nn.Module):
             bbox_exist = torch.cat([c for c in bbox_exist], dim=1)
             bbox_exist = torch.max(bbox_exist, dim=1)[0]
 
-
             # get max from K x A x W x H to get max classificiation and bbox
             classification = torch.cat([c for c in classifications], dim=1)
             best_per_box = torch.max(classification, dim=2)[0]
             best_bbox = torch.argmax(best_per_box, dim=1)
 
-            now = time.time()
-
-
             class_boxes = classification[torch.arange(batch_size), best_bbox, :]
             classification_guess = torch.argmax(class_boxes, dim=1)
-            now = time.time()
 
             if self.training:
                 ground_truth_1 = self.noun_embedding(annotations[:, i, -1].long())
@@ -373,8 +360,6 @@ class ResNet(nn.Module):
             else:
                 previous_word = self.noun_embedding(classification_guess)
 
-            other_time += time.time() - now
-
 
             if self.training:
                 previous_boxes = annotations[:, i, :4]
@@ -383,37 +368,35 @@ class ResNet(nn.Module):
                 transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
                 previous_boxes = transformed_anchors[torch.arange(batch_size), best_bbox, :]
 
-            # if self.bbox_embedding:
-            #     prev_heights = (previous_boxes[:, 2] - previous_boxes[:, 0])/heights
-            #     prev_widths = (previous_boxes[:, 3] - previous_boxes[:, 1])/widths
-            #     prev_ctr_y = previous_boxes[:, 0]/heights + 0.5 * prev_heights
-            #     prev_ctr_x = previous_boxes[:, 1]/widths + 0.5 * prev_widths
-            #
-            #     prev_widths = torch.ceil(prev_widths*10).long()
-            #     prev_heights = torch.ceil(prev_heights*10).long()
-            #     prev_ctr_x = torch.ceil(prev_ctr_x*10).long()
-            #     prev_ctr_y = torch.ceil(prev_ctr_y*10).long()
-            #
-            #     prev_widths = torch.clamp(prev_widths, 0, 10)
-            #     prev_heights = torch.clamp(prev_heights, 0, 10)
-            #     prev_ctr_x = torch.clamp(prev_ctr_x, 0, 10)
-            #     prev_ctr_y = torch.clamp(prev_ctr_y, 0, 10)
+            if self.bbox_embedding:
+                prev_heights = (previous_boxes[:, 2] - previous_boxes[:, 0])/heights
+                prev_widths = (previous_boxes[:, 3] - previous_boxes[:, 1])/widths
+                prev_ctr_y = previous_boxes[:, 0]/heights + 0.5 * prev_heights
+                prev_ctr_x = previous_boxes[:, 1]/widths + 0.5 * prev_widths
 
-                # if not self.training:
-                #     bbox_exist = torch.sigmoid(bbox_exist)
-                #     prev_widths[bbox_exist < 0.5] = 0
-                #     prev_heights[bbox_exist < 0.5] = 0
-                #     prev_ctr_x[bbox_exist < 0.5] = 0
-                #     prev_ctr_y[bbox_exist < 0.5] = 0
+                prev_widths = torch.ceil(prev_widths*10).long()
+                prev_heights = torch.ceil(prev_heights*10).long()
+                prev_ctr_x = torch.ceil(prev_ctr_x*10).long()
+                prev_ctr_y = torch.ceil(prev_ctr_y*10).long()
 
-                # previous_box_embed = torch.cat([self.bbox_width_embed(prev_widths), self.bbox_height_embed(prev_heights), self.bbox_x_embed(prev_ctr_x), self.bbox_y_embed(prev_ctr_y)], dim=1)
+                prev_widths = torch.clamp(prev_widths, 0, 10)
+                prev_heights = torch.clamp(prev_heights, 0, 10)
+                prev_ctr_x = torch.clamp(prev_ctr_x, 0, 10)
+                prev_ctr_y = torch.clamp(prev_ctr_y, 0, 10)
+
+                if not self.training:
+                    bbox_exist = torch.sigmoid(bbox_exist)
+                    prev_widths[bbox_exist < 0.5] = 0
+                    prev_heights[bbox_exist < 0.5] = 0
+                    prev_ctr_x[bbox_exist < 0.5] = 0
+                    prev_ctr_y[bbox_exist < 0.5] = 0
+
+                previous_box_embed = torch.cat([self.bbox_width_embed(prev_widths), self.bbox_height_embed(prev_heights), self.bbox_x_embed(prev_ctr_x), self.bbox_y_embed(prev_ctr_y)], dim=1)
 
 
             if self.training:
                 anns = annotations[:, i, :].unsqueeze(1)
-                now = time.time()
                 class_loss, reg_loss, bbox_loss = self.focalLoss(classification, regression, anchors, bbox_exist, anns)
-                other_time += time.time() - now
                 all_class_loss += class_loss
                 all_reg_loss += reg_loss
                 all_bbox_loss += bbox_loss

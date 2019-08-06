@@ -167,17 +167,24 @@ class CSVDataset(Dataset):
         # parse annotations
         for idx, a in enumerate(annotation_list):
             # some annotations have basically no width / height, skip them
-            x1 = a['x1']/2.0 #SARAH - dividing these
-            x2 = a['x2']/2.0
-            y1 = a['y1']/2.0
-            y2 = a['y2']/2.0
+            if a['x1'] == -1:
+                x1 = a['x1']#SARAH - dividing these
+                x2 = a['x2']
+                y1 = a['y1']
+                y2 = a['y2']
+            else:
+                x1 = a['x1'] / 2.0  # SARAH - dividing these
+                x2 = a['x2'] / 2.0
+                y1 = a['y1'] / 2.0
+                y2 = a['y2'] / 2.0
+
 
             #if (x2-x1) < 1 or (y2-y1) < 1:
             #    continue
 
             #annotation = np.zeros((1, 5))
             annotation        = np.zeros((1, 7)) #allow for 3 annotations
-            
+
             annotation[0, 0] = x1
             annotation[0, 1] = y1
             annotation[0, 2] = x2
@@ -299,7 +306,7 @@ def collater(data):
 class Resizer(object):
     """Convert ndarrays in sample to Tensors."""
 
-    def __call__(self, sample, min_side=256, max_side=500):
+    def __call__(self, sample, min_side=256, max_side=256):
         image, annots, image_name = sample['img'], sample['annot'], sample['img_name']
 
         rows_orig, cols_orig, cns_orig = image.shape

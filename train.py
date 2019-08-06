@@ -111,9 +111,9 @@ def main(args=None):
 
 	print('Num training images: {}'.format(len(dataset_train)))
 
-	x = torch.load('./runs/verb_in_lstm/checkpoints/retinanet_23.pth')
+	x = torch.load('./runs/stack_fpn_and_lstm/checkpoints/retinanet_8.pth')
 	retinanet.module.load_state_dict(x)
-	# parser.resume_epoch = 1
+	parser.resume_epoch = 9
 
 	for epoch_num in range(parser.resume_epoch, parser.epochs):
 
