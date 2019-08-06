@@ -274,12 +274,12 @@ class ResNet(nn.Module):
         x = self.maxpool(x)
 
         x1 = self.layer1(x)
-        x2 = self.layer2(x1).detach()
-        x3 = self.layer3(x2).detach()
-        x4 = self.layer4(x3).detach()
-        # x2 = self.layer2(x1)
-        # x3 = self.layer3(x2)
-        # x4 = self.layer4(x3)
+        # x2 = self.layer2(x1).detach()
+        # x3 = self.layer3(x2).detach()
+        # x4 = self.layer4(x3).detach()
+        x2 = self.layer2(x1)
+        x3 = self.layer3(x2)
+        x4 = self.layer4(x3)
 
         image_predict = self.avgpool(x4)
         image_predict = image_predict.squeeze()
@@ -329,12 +329,13 @@ class ResNet(nn.Module):
             rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
 
             #features = [feature * rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
-            regression = torch.cat([self.regressionModel(torch.cat((features[i], rnn_feature_shapes[i]), dim=1)) for i in range(len(features))], dim=1)
+            regression = torch.cat([self.regressionModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1)) for ii in range(len(features))], dim=1)
+            #regression = torch.cat([self.regressionModel(features[i] * rnn_feature_shapes[i]) for i in range(len(features))], dim=1)
             classifications = []
             bbox_exist = []
 
-            for i in range(len(features)):
-                classication = self.classificationModel(torch.cat((features[i], rnn_feature_shapes[i]), dim=1))
+            for ii in range(len(features)):
+                classication = self.classificationModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1))
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
 
