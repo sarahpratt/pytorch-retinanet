@@ -77,43 +77,68 @@ class PyramidFeatures(nn.Module):
         # return [P4_x, P5_x, P6_x, P7_x]
 
 
+# class RegressionModel_part1(nn.Module):
+#     def __init__(self, num_features_in, num_anchors=9, feature_size=256):
+#         super(RegressionModel_part1, self).__init__()
+#         self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
+#         self.act1 = nn.ReLU()
+#         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
+#         self.act2 = nn.ReLU()
+#         self.conv3 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
+#         self.act3 = nn.ReLU()
+#         self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
+#         self.act4 = nn.ReLU()
+#
+#     def forward(self, x):
+#         out = self.conv1(x)
+#         out = self.act1(out)
+#         out = self.conv2(out)
+#         out = self.act2(out)
+#         out = self.conv3(out)
+#         out = self.act3(out)
+#         out = self.conv4(out)
+#         out1 = self.act4(out)
+#         return out1
+#
+#
+# class RegressionModel_part2(nn.Module):
+#     def __init__(self, num_anchors=9, feature_size=256):
+#         super(RegressionModel_part2, self).__init__()
+#         self.output = nn.Conv2d(feature_size, num_anchors * 4, kernel_size=3, padding=1)
+#
+#     def forward(self, x, rnn_features):
+#         #x = x * rnn_features
+#         out = self.output(x)
+#         out = out.permute(0, 2, 3, 1)  # out is B x C x W x H, with C = 4*num_anchors
+#         return out.contiguous().view(out.shape[0], -1, 4)
+
 class RegressionModel(nn.Module):
     def __init__(self, num_features_in, num_anchors=9, feature_size=256):
         super(RegressionModel, self).__init__()
 
         self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
         self.act1 = nn.ReLU()
-
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act2 = nn.ReLU()
-
         self.conv3 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act3 = nn.ReLU()
-
         self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act4 = nn.ReLU()
-
         self.output = nn.Conv2d(feature_size, num_anchors * 4, kernel_size=3, padding=1)
 
     def forward(self, x):
         out = self.conv1(x)
         out = self.act1(out)
-
         out = self.conv2(out)
         out = self.act2(out)
-
         out = self.conv3(out)
         # out = out * rnn_feature_shape
         out = self.act3(out)
-
         out = self.conv4(out)
         out1 = self.act4(out)
-
         out = self.output(out1)
-
         # out is B x C x W x H, with C = 4*num_anchors
         out = out.permute(0, 2, 3, 1)
-
         return out.contiguous().view(out.shape[0], -1, 4)
 
 
@@ -122,7 +147,6 @@ class ClassificationModel(nn.Module):
         super(ClassificationModel, self).__init__()
         self.num_classes = num_classes
         self.num_anchors = num_anchors
-
         self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
@@ -131,10 +155,8 @@ class ClassificationModel(nn.Module):
         self.act3 = nn.ReLU()
         self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act4 = nn.ReLU()
-
         self.pool = torch.nn.AdaptiveMaxPool2d((1, 1))
         self.features_linear = nn.Linear(feature_size, 1)
-        # self.act_binary = nn.Sigmoid()
 
         self.output_retina = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
         self.output_act_retina = nn.Sigmoid()
@@ -148,11 +170,9 @@ class ClassificationModel(nn.Module):
         # out = out * rnn_feature_shape
         out = self.act3(out)
         out = self.conv4(out)
-
         # BBox Binary Logit
         bbox_exists = self.pool(out).squeeze()
         bbox_exists = self.features_linear(bbox_exists)
-        # bbox_exists = self.act_binary(bbox_exists)
 
         # Classification Branch
         out = self.act4(out)
@@ -161,8 +181,68 @@ class ClassificationModel(nn.Module):
         out1 = out1.permute(0, 2, 3, 1)  # out is B x C x W x H, with C = n_classes + n_anchors
         batch_size, width, height, channels = out1.shape
         out2 = out1.view(batch_size, width, height, self.num_anchors, self.num_classes)
-
         return out2.contiguous().view(x.shape[0], -1, self.num_classes), bbox_exists
+
+
+# class ClassificationModel_part1(nn.Module):
+#     def __init__(self, num_features_in, num_anchors=9, num_classes=80, prior=0.01, feature_size=256):
+#         super(ClassificationModel_part1, self).__init__()
+#         self.num_classes = num_classes
+#         self.num_anchors = num_anchors
+#         self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
+#         self.act1 = nn.ReLU()
+#         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
+#         self.act2 = nn.ReLU()
+#         self.conv3 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
+#         self.act3 = nn.ReLU()
+#         self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
+#         #self.act4 = nn.ReLU()
+#
+#     def forward(self, x):
+#         out = self.conv1(x)
+#         out = self.act1(out)
+#         out = self.conv2(out)
+#         out = self.act2(out)
+#         out = self.conv3(out)
+#         out = self.act3(out)
+#         out = self.conv4(out)
+#         #out = self.act4(out)
+#         return out
+#
+#
+# class ClassificationModel_part2(nn.Module):
+#     def __init__(self, num_anchors=9, num_classes=80, prior=0.01, feature_size=256):
+#         super(ClassificationModel_part2, self).__init__()
+#         self.num_anchors = num_anchors
+#         self.num_classes = num_classes
+#
+#         self.pool = torch.nn.AdaptiveMaxPool2d((1, 1))
+#         self.features_linear = nn.Linear(feature_size, 1)
+#         # self.act_binary = nn.Sigmoid()
+#
+#         self.output_retina = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
+#         self.output_act_retina = nn.Sigmoid()
+#
+#         self.act4 = nn.ReLU()
+#
+#
+#     def forward(self, out, rnn_features):
+#         #out = out * rnn_features
+#
+#         # BBox Binary Logit
+#         bbox_exists = self.pool(out).squeeze()
+#         bbox_exists = self.features_linear(bbox_exists)
+#         #bbox_exists = self.act_binary(bbox_exists)
+#
+#         # Classification Branch
+#         out = self.act4(out)
+#         out1 = self.output_retina(out)
+#         out1 = self.output_act_retina(out1)
+#         out1 = out1.permute(0, 2, 3, 1)  # out is B x C x W x H, with C = n_classes + n_anchors
+#         batch_size, width, height, channels = out1.shape
+#         out2 = out1.view(batch_size, width, height, self.num_anchors, self.num_classes)
+#
+#         return out2.contiguous().view(out.shape[0], -1, self.num_classes), bbox_exists
 
 
 class ResNet_RetinaNet_RNN(nn.Module):
@@ -170,60 +250,44 @@ class ResNet_RetinaNet_RNN(nn.Module):
     def __init__(self, num_classes, block, layers, bbox_embedding=True):
         self.inplanes = 64
         super(ResNet_RetinaNet_RNN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
 
-        if block == BasicBlock:
-            fpn_sizes = [self.layer2[layers[1] - 1].conv2.out_channels, self.layer3[layers[2] - 1].conv2.out_channels,
-                         self.layer4[layers[3] - 1].conv2.out_channels]
-        elif block == Bottleneck:
-            fpn_sizes = [self.layer2[layers[1] - 1].conv3.out_channels, self.layer3[layers[2] - 1].conv3.out_channels,
-                         self.layer4[layers[3] - 1].conv3.out_channels]
-
-        self.fpn = PyramidFeatures(fpn_sizes[0], fpn_sizes[1], fpn_sizes[2])
+        self._init_resnet(block, layers)
+        self.fpn = PyramidFeatures(self.fpn_sizes[0], self.fpn_sizes[1], self.fpn_sizes[2])
 
         self.regressionModel = RegressionModel(256)
+        #self.regressionModel_2 = RegressionModel_part2()
+        #self.classificationModel_1 = ClassificationModel_part1(256, num_classes=num_classes)
+        #self.classificationModel_2 = ClassificationModel_part2(num_classes=num_classes)
         self.classificationModel = ClassificationModel(256, num_classes=num_classes)
+
         self.anchors = Anchors()
         self.regressBoxes = BBoxTransform()
         self.clipBoxes = ClipBoxes()
         self.focalLoss = losses.FocalLoss()
         self.bbox_embedding = bbox_embedding
 
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2. / n))
-            elif isinstance(m, nn.BatchNorm2d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
+        self._convs_and_bn_weights()
 
         # verb predictor
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(2048, 504)
 
+        # init embeddings
         self.verb_embeding = nn.Embedding(504, 512)
         self.noun_embedding = nn.Embedding(num_classes, 512)
-
         self.bbox_width_embed = nn.Embedding(11, 16)
         self.bbox_height_embed = nn.Embedding(11, 16)
         self.bbox_x_embed = nn.Embedding(11, 16)
         self.bbox_y_embed = nn.Embedding(11, 16)
 
+        # init rnn and rnn weights
         self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024)
-
         for name, param in self.rnn.named_parameters():
             if 'weight' in name:
                 nn.init.orthogonal_(param)
-
         self.rnn_linear = nn.Linear(1024, 256)
 
+        # fill class/reg branches with weights
         prior = 0.01
 
         self.classificationModel.output_retina.weight.data.fill_(0)
@@ -235,6 +299,37 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.freeze_bn()
         self.loss_function = nn.CrossEntropyLoss()
         self.all_box_regression = False
+
+
+    def _init_resnet(self, block, layers):
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+
+        if block == BasicBlock:
+            self.fpn_sizes = [self.layer2[layers[1] - 1].conv2.out_channels,
+                              self.layer3[layers[2] - 1].conv2.out_channels,
+                              self.layer4[layers[3] - 1].conv2.out_channels]
+        elif block == Bottleneck:
+            self.fpn_sizes = [self.layer2[layers[1] - 1].conv3.out_channels,
+                              self.layer3[layers[2] - 1].conv3.out_channels,
+                              self.layer4[layers[3] - 1].conv3.out_channels]
+
+
+    def _convs_and_bn_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
 
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
@@ -275,9 +370,6 @@ class ResNet_RetinaNet_RNN(nn.Module):
         x = self.maxpool(x)
 
         x1 = self.layer1(x)
-        # x2 = self.layer2(x1).detach()
-        # x3 = self.layer3(x2).detach()
-        # x4 = self.layer4(x3).detach()
         x2 = self.layer2(x1)
         x3 = self.layer3(x2)
         x4 = self.layer4(x3)
@@ -303,7 +395,6 @@ class ResNet_RetinaNet_RNN(nn.Module):
         # init LSTM inputs
         hx, cx = torch.zeros(batch_size, 1024).cuda(x.device), torch.zeros(batch_size, 1024).cuda(x.device)
         previous_box_embed = torch.zeros(batch_size, 64).cuda(x.device)
-        # previous_word = torch.zeros(batch_size, 512).cuda(x.device)
 
         # init losses
         all_class_loss = 0
@@ -315,23 +406,28 @@ class ResNet_RetinaNet_RNN(nn.Module):
             bbox_predicts = []
             bbox_exist_list = []
 
+        # self.regression_inputs = [self.regressionModel_1(features[ii]) for ii in range(len(features))]
+        # self.classification_inputs = [self.classificationModel_1(features[ii]) for ii in range(len(features))]
+
+
         for i in range(6):
             rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
 
-            rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
+            #rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(input.shape) for input in self.regression_inputs]
+            rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape)*feature for feature in features]
 
-            # features = [feature * rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
-            # regression = torch.cat([self.regressionModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1)) for ii in range(len(features))], dim=1)
-            regression = torch.cat(
-                [self.regressionModel(features[ii] * rnn_feature_shapes[ii]) for ii in range(len(features))], dim=1)
+            #self.regression_inputs = [self.regressionModel_1(rnn_feature_shapes[ii]) for ii in range(len(features))]
+            regression = torch.cat([self.regressionModel(rnn_feature_shapes[ii]) for ii in range(len(features))], dim=1)
+
+
             classifications = []
             bbox_exist = []
 
             for ii in range(len(features)):
-                # classication = self.classificationModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1))
-                classication = self.classificationModel(features[ii] * rnn_feature_shapes[ii])
+                #classication = self.classificationModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1))
+                classication = self.classificationModel(rnn_feature_shapes[ii])
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
 
