@@ -186,8 +186,8 @@ class ResNet(nn.Module):
 
         self.fpn = PyramidFeatures(fpn_sizes[0], fpn_sizes[1], fpn_sizes[2])
 
-        self.regressionModel = RegressionModel(512)
-        self.classificationModel = ClassificationModel(512, num_classes=num_classes)
+        self.regressionModel = RegressionModel(256)
+        self.classificationModel = ClassificationModel(256, num_classes=num_classes)
         self.anchors = Anchors()
         self.regressBoxes = BBoxTransform()
         self.clipBoxes = ClipBoxes()
@@ -204,7 +204,7 @@ class ResNet(nn.Module):
 
         # verb predictor
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc_verb = nn.Linear(1024, 504)
+        self.fc = nn.Linear(2048, 504)
 
         self.verb_embeding = nn.Embedding(504, 512)
         self.noun_embedding = nn.Embedding(num_classes, 512)
@@ -286,29 +286,24 @@ class ResNet(nn.Module):
         if len(image_predict.shape) == 1:
             image_predict = image_predict.unsqueeze(0)
 
-        # Get feature pyramid
-        features = self.fpn([x2, x3, x4])
-        anchors = self.anchors(img_batch)
-        #features = [features[1], features[4]]
-        #features = [features[1], features[2], features[3], features[4]]
-        #features = [features[0]]
-        features.pop(0) #SARAH - remove feature batch
-
-        # init LSTM inputs
-        hx, cx = torch.zeros(batch_size, 1024).cuda(x.device), torch.zeros(batch_size, 1024).cuda(x.device)
-        previous_box_embed = torch.zeros(batch_size, 64).cuda(x.device)
-        previous_word = torch.zeros(batch_size, 512).cuda(x.device)
-
-        rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
-        hx, cx = self.rnn(rnn_input, (hx, cx))
-        verb_predict = self.fc_verb(hx)
+        verb_predict = self.fc(image_predict)
         verb_guess = torch.argmax(verb_predict, dim=1)
-
         verb_loss = self.loss_function(verb_predict, verb)
         if self.training:
             previous_word = self.verb_embeding(verb.long())
         else:
             previous_word = self.verb_embeding(verb_guess)
+
+        # Get feature pyramid
+        features = self.fpn([x2, x3, x4])
+        anchors = self.anchors(img_batch)
+        features.pop(0) #SARAH - remove feature batch
+
+        # init LSTM inputs
+        hx, cx = torch.zeros(batch_size, 1024).cuda(x.device), torch.zeros(batch_size, 1024).cuda(x.device)
+        previous_box_embed = torch.zeros(batch_size, 64).cuda(x.device)
+        #previous_word = torch.zeros(batch_size, 512).cuda(x.device)
+
 
         # init losses
         all_class_loss = 0
@@ -329,13 +324,14 @@ class ResNet(nn.Module):
             rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
 
             #features = [feature * rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
-            regression = torch.cat([self.regressionModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1)) for ii in range(len(features))], dim=1)
-            #regression = torch.cat([self.regressionModel(features[i] * rnn_feature_shapes[i]) for i in range(len(features))], dim=1)
+            #regression = torch.cat([self.regressionModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1)) for ii in range(len(features))], dim=1)
+            regression = torch.cat([self.regressionModel(features[ii] * rnn_feature_shapes[ii]) for ii in range(len(features))], dim=1)
             classifications = []
             bbox_exist = []
 
             for ii in range(len(features)):
-                classication = self.classificationModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1))
+                #classication = self.classificationModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1))
+                classication = self.classificationModel(features[ii]* rnn_feature_shapes[ii])
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
 
@@ -452,9 +448,9 @@ def resnet50(num_classes, pretrained=False, **kwargs):
     if pretrained:
         state_dict = model_zoo.load_url(model_urls['resnet50'], model_dir='.')
         print("state dict")
-        # x = nn.Linear(2048, 504)
-        # state_dict['fc.weight'] = x.weight
-        # state_dict['fc.bias'] = x.bias
+        x = nn.Linear(2048, 504)
+        state_dict['fc.weight'] = x.weight
+        state_dict['fc.bias'] = x.bias
         model.load_state_dict(state_dict, strict=False)
     return model
 
