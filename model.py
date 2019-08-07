@@ -10,11 +10,13 @@ from lib.nms.pth_nms import pth_nms
 import torch.nn.functional as F
 import pdb
 
+
 def nms(dets, thresh):
     "Dispatch to either CPU or GPU NMS implementations.\
     Accept dets as tensor"""
 
     return pth_nms(dets, thresh)
+
 
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
@@ -24,19 +26,20 @@ model_urls = {
     'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
 }
 
+
 class PyramidFeatures(nn.Module):
     def __init__(self, C3_size, C4_size, C5_size, feature_size=256):
         super(PyramidFeatures, self).__init__()
-        
+
         # upsample C5 to get P5 from the FPN paper
-        self.P5_1           = nn.Conv2d(C5_size, feature_size, kernel_size=1, stride=1, padding=0)
-        self.P5_upsampled   = nn.Upsample(scale_factor=2, mode='nearest')
-        self.P5_2           = nn.Conv2d(feature_size, feature_size, kernel_size=3, stride=1, padding=1)
+        self.P5_1 = nn.Conv2d(C5_size, feature_size, kernel_size=1, stride=1, padding=0)
+        self.P5_upsampled = nn.Upsample(scale_factor=2, mode='nearest')
+        self.P5_2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, stride=1, padding=1)
 
         # add P5 elementwise to C4
-        self.P4_1           = nn.Conv2d(C4_size, feature_size, kernel_size=1, stride=1, padding=0)
-        self.P4_upsampled   = nn.Upsample(scale_factor=2, mode='nearest')
-        self.P4_2           = nn.Conv2d(feature_size, feature_size, kernel_size=3, stride=1, padding=1)
+        self.P4_1 = nn.Conv2d(C4_size, feature_size, kernel_size=1, stride=1, padding=0)
+        self.P4_upsampled = nn.Upsample(scale_factor=2, mode='nearest')
+        self.P4_2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, stride=1, padding=1)
 
         # add P4 elementwise to C3
         self.P3_1 = nn.Conv2d(C3_size, feature_size, kernel_size=1, stride=1, padding=0)
@@ -50,13 +53,12 @@ class PyramidFeatures(nn.Module):
         self.P7_2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, stride=2, padding=1)
 
     def forward(self, inputs):
-
         C3, C4, C5 = inputs
 
         P5_x = self.P5_1(C5)
         P5_upsampled_x = self.P5_upsampled(P5_x)
         P5_x = self.P5_2(P5_x)
-        
+
         P4_x = self.P4_1(C4)
         P4_x = P5_upsampled_x + P4_x
         P4_upsampled_x = self.P4_upsampled(P4_x)
@@ -72,13 +74,13 @@ class PyramidFeatures(nn.Module):
         P7_x = self.P7_2(P7_x)
 
         return [P3_x, P4_x, P5_x, P6_x, P7_x]
-        #return [P4_x, P5_x, P6_x, P7_x]
+        # return [P4_x, P5_x, P6_x, P7_x]
 
 
 class RegressionModel(nn.Module):
     def __init__(self, num_features_in, num_anchors=9, feature_size=256):
         super(RegressionModel, self).__init__()
-        
+
         self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
         self.act1 = nn.ReLU()
 
@@ -91,10 +93,9 @@ class RegressionModel(nn.Module):
         self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act4 = nn.ReLU()
 
-        self.output = nn.Conv2d(feature_size, num_anchors*4, kernel_size=3, padding=1)
+        self.output = nn.Conv2d(feature_size, num_anchors * 4, kernel_size=3, padding=1)
 
     def forward(self, x):
-
         out = self.conv1(x)
         out = self.act1(out)
 
@@ -102,7 +103,7 @@ class RegressionModel(nn.Module):
         out = self.act2(out)
 
         out = self.conv3(out)
-        #out = out * rnn_feature_shape
+        # out = out * rnn_feature_shape
         out = self.act3(out)
 
         out = self.conv4(out)
@@ -133,11 +134,10 @@ class ClassificationModel(nn.Module):
 
         self.pool = torch.nn.AdaptiveMaxPool2d((1, 1))
         self.features_linear = nn.Linear(feature_size, 1)
-        #self.act_binary = nn.Sigmoid()
+        # self.act_binary = nn.Sigmoid()
 
         self.output_retina = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
         self.output_act_retina = nn.Sigmoid()
-
 
     def forward(self, x):
         out = self.conv1(x)
@@ -145,14 +145,14 @@ class ClassificationModel(nn.Module):
         out = self.conv2(out)
         out = self.act2(out)
         out = self.conv3(out)
-        #out = out * rnn_feature_shape
+        # out = out * rnn_feature_shape
         out = self.act3(out)
         out = self.conv4(out)
 
         # BBox Binary Logit
         bbox_exists = self.pool(out).squeeze()
         bbox_exists = self.features_linear(bbox_exists)
-        #bbox_exists = self.act_binary(bbox_exists)
+        # bbox_exists = self.act_binary(bbox_exists)
 
         # Classification Branch
         out = self.act4(out)
@@ -165,11 +165,11 @@ class ClassificationModel(nn.Module):
         return out2.contiguous().view(x.shape[0], -1, self.num_classes), bbox_exists
 
 
-class ResNet(nn.Module):
+class ResNet_RetinaNet_RNN(nn.Module):
 
     def __init__(self, num_classes, block, layers, bbox_embedding=True):
         self.inplanes = 64
-        super(ResNet, self).__init__()
+        super(ResNet_RetinaNet_RNN, self).__init__()
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
@@ -180,9 +180,11 @@ class ResNet(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
 
         if block == BasicBlock:
-            fpn_sizes = [self.layer2[layers[1]-1].conv2.out_channels, self.layer3[layers[2]-1].conv2.out_channels, self.layer4[layers[3]-1].conv2.out_channels]
+            fpn_sizes = [self.layer2[layers[1] - 1].conv2.out_channels, self.layer3[layers[2] - 1].conv2.out_channels,
+                         self.layer4[layers[3] - 1].conv2.out_channels]
         elif block == Bottleneck:
-            fpn_sizes = [self.layer2[layers[1]-1].conv3.out_channels, self.layer3[layers[2]-1].conv3.out_channels, self.layer4[layers[3]-1].conv3.out_channels]
+            fpn_sizes = [self.layer2[layers[1] - 1].conv3.out_channels, self.layer3[layers[2] - 1].conv3.out_channels,
+                         self.layer4[layers[3] - 1].conv3.out_channels]
 
         self.fpn = PyramidFeatures(fpn_sizes[0], fpn_sizes[1], fpn_sizes[2])
 
@@ -223,9 +225,9 @@ class ResNet(nn.Module):
         self.rnn_linear = nn.Linear(1024, 256)
 
         prior = 0.01
-        
+
         self.classificationModel.output_retina.weight.data.fill_(0)
-        self.classificationModel.output_retina.bias.data.fill_(-math.log((1.0-prior)/prior))
+        self.classificationModel.output_retina.bias.data.fill_(-math.log((1.0 - prior) / prior))
 
         self.regressionModel.output.weight.data.fill_(0)
         self.regressionModel.output.bias.data.fill_(0)
@@ -233,7 +235,6 @@ class ResNet(nn.Module):
         self.freeze_bn()
         self.loss_function = nn.CrossEntropyLoss()
         self.all_box_regression = False
-
 
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
@@ -297,13 +298,12 @@ class ResNet(nn.Module):
         # Get feature pyramid
         features = self.fpn([x2, x3, x4])
         anchors = self.anchors(img_batch)
-        features.pop(0) #SARAH - remove feature batch
+        features.pop(0)  # SARAH - remove feature batch
 
         # init LSTM inputs
         hx, cx = torch.zeros(batch_size, 1024).cuda(x.device), torch.zeros(batch_size, 1024).cuda(x.device)
         previous_box_embed = torch.zeros(batch_size, 64).cuda(x.device)
-        #previous_word = torch.zeros(batch_size, 512).cuda(x.device)
-
+        # previous_word = torch.zeros(batch_size, 512).cuda(x.device)
 
         # init losses
         all_class_loss = 0
@@ -320,18 +320,18 @@ class ResNet(nn.Module):
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
 
-
             rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
 
-            #features = [feature * rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
-            #regression = torch.cat([self.regressionModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1)) for ii in range(len(features))], dim=1)
-            regression = torch.cat([self.regressionModel(features[ii] * rnn_feature_shapes[ii]) for ii in range(len(features))], dim=1)
+            # features = [feature * rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
+            # regression = torch.cat([self.regressionModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1)) for ii in range(len(features))], dim=1)
+            regression = torch.cat(
+                [self.regressionModel(features[ii] * rnn_feature_shapes[ii]) for ii in range(len(features))], dim=1)
             classifications = []
             bbox_exist = []
 
             for ii in range(len(features)):
-                #classication = self.classificationModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1))
-                classication = self.classificationModel(features[ii]* rnn_feature_shapes[ii])
+                # classication = self.classificationModel(torch.cat((features[ii], rnn_feature_shapes[ii]), dim=1))
+                classication = self.classificationModel(features[ii] * rnn_feature_shapes[ii])
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
 
@@ -357,7 +357,6 @@ class ResNet(nn.Module):
             else:
                 previous_word = self.noun_embedding(classification_guess)
 
-
             if self.training:
                 previous_boxes = annotations[:, i, :4]
             else:
@@ -366,15 +365,15 @@ class ResNet(nn.Module):
                 previous_boxes = transformed_anchors[torch.arange(batch_size), best_bbox, :]
 
             if self.bbox_embedding:
-                prev_heights = (previous_boxes[:, 2] - previous_boxes[:, 0])/heights
-                prev_widths = (previous_boxes[:, 3] - previous_boxes[:, 1])/widths
-                prev_ctr_y = previous_boxes[:, 0]/heights + 0.5 * prev_heights
-                prev_ctr_x = previous_boxes[:, 1]/widths + 0.5 * prev_widths
+                prev_heights = (previous_boxes[:, 2] - previous_boxes[:, 0]) / heights
+                prev_widths = (previous_boxes[:, 3] - previous_boxes[:, 1]) / widths
+                prev_ctr_y = previous_boxes[:, 0] / heights + 0.5 * prev_heights
+                prev_ctr_x = previous_boxes[:, 1] / widths + 0.5 * prev_widths
 
-                prev_widths = torch.ceil(prev_widths*10).long()
-                prev_heights = torch.ceil(prev_heights*10).long()
-                prev_ctr_x = torch.ceil(prev_ctr_x*10).long()
-                prev_ctr_y = torch.ceil(prev_ctr_y*10).long()
+                prev_widths = torch.ceil(prev_widths * 10).long()
+                prev_heights = torch.ceil(prev_heights * 10).long()
+                prev_ctr_x = torch.ceil(prev_ctr_x * 10).long()
+                prev_ctr_y = torch.ceil(prev_ctr_y * 10).long()
 
                 prev_widths = torch.clamp(prev_widths, 0, 10)
                 prev_heights = torch.clamp(prev_heights, 0, 10)
@@ -388,8 +387,9 @@ class ResNet(nn.Module):
                     prev_ctr_x[bbox_exist < 0.5] = 0
                     prev_ctr_y[bbox_exist < 0.5] = 0
 
-                previous_box_embed = torch.cat([self.bbox_width_embed(prev_widths), self.bbox_height_embed(prev_heights), self.bbox_x_embed(prev_ctr_x), self.bbox_y_embed(prev_ctr_y)], dim=1)
-
+                previous_box_embed = torch.cat(
+                    [self.bbox_width_embed(prev_widths), self.bbox_height_embed(prev_heights),
+                     self.bbox_x_embed(prev_ctr_x), self.bbox_y_embed(prev_ctr_y)], dim=1)
 
             if self.training:
                 anns = annotations[:, i, :].unsqueeze(1)
@@ -401,7 +401,6 @@ class ResNet(nn.Module):
                 bbox_predicts.append(previous_boxes)
                 noun_predicts.append(classification_guess)
                 bbox_exist_list.append(bbox_exist)
-
 
         # print("lstm")
         # print(lstm_time)
@@ -416,13 +415,12 @@ class ResNet(nn.Module):
             return verb_guess, noun_predicts, bbox_predicts, bbox_exist_list
 
 
-
 def resnet18(num_classes, pretrained=False, **kwargs):
     """Constructs a ResNet-18 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(num_classes, BasicBlock, [2, 2, 2, 2], **kwargs)
+    model = ResNet_RetinaNet_RNN(num_classes, BasicBlock, [2, 2, 2, 2], **kwargs)
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet18'], model_dir='.'), strict=False)
     return model
@@ -433,7 +431,7 @@ def resnet34(num_classes, pretrained=False, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(num_classes, BasicBlock, [3, 4, 6, 3], **kwargs)
+    model = ResNet_RetinaNet_RNN(num_classes, BasicBlock, [3, 4, 6, 3], **kwargs)
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet34'], model_dir='.'), strict=False)
     return model
@@ -444,7 +442,7 @@ def resnet50(num_classes, pretrained=False, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs)
+    model = ResNet_RetinaNet_RNN(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
         state_dict = model_zoo.load_url(model_urls['resnet50'], model_dir='.')
         print("state dict")
@@ -454,12 +452,13 @@ def resnet50(num_classes, pretrained=False, **kwargs):
         model.load_state_dict(state_dict, strict=False)
     return model
 
+
 def resnet101(num_classes, pretrained=False, **kwargs):
     """Constructs a ResNet-101 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(num_classes, Bottleneck, [3, 4, 23, 3], **kwargs)
+    model = ResNet_RetinaNet_RNN(num_classes, Bottleneck, [3, 4, 23, 3], **kwargs)
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet101'], model_dir='.'), strict=False)
     return model
@@ -470,7 +469,7 @@ def resnet152(num_classes, pretrained=False, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(num_classes, Bottleneck, [3, 8, 36, 3], **kwargs)
+    model = ResNet_RetinaNet_RNN(num_classes, Bottleneck, [3, 8, 36, 3], **kwargs)
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet152'], model_dir='.'), strict=False)
     return model

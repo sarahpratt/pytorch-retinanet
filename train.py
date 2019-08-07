@@ -194,8 +194,8 @@ def main(args=None):
 				all_backward_time = 0.0
 				all_time = 0.0
 
-			#loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
-			loss = verb_loss.mean()
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
+			#loss = verb_loss.mean()
 
 			#epoch_loss.append(loss)
 
