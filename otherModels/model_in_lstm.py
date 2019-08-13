@@ -158,8 +158,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self._init_resnet(block, layers)
         self.fpn = PyramidFeatures(self.fpn_sizes[0], self.fpn_sizes[1], self.fpn_sizes[2])
 
-        self.regressionModel = RegressionModel(768)
-        self.classificationModel = ClassificationModel(768, num_classes=num_classes)
+        self.regressionModel = RegressionModel(256)
+        self.classificationModel = ClassificationModel(256, num_classes=num_classes)
         #self.classificationModel = ClassificationModel(256, num_classes=num_classes)
 
         self.anchors = Anchors()
@@ -172,7 +172,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
         # verb predictor
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(2048, 504)
+        self.fc_verb = nn.Linear(1024, 504)
 
         # init embeddings
         self.verb_embeding = nn.Embedding(504, 512)
@@ -256,8 +256,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
 
-    def forward(self, inputs, detach_resnet=False, use_gt_nouns=False):
-
+    def forward(self, inputs, return_all_scores=False):
 
         if self.training:
             img_batch, annotations, verb, widths, heights = inputs
@@ -273,28 +272,14 @@ class ResNet_RetinaNet_RNN(nn.Module):
         x = self.maxpool(x)
 
         x1 = self.layer1(x)
-
-        if detach_resnet:
-            x2 = self.layer2(x1).detach()
-            x3 = self.layer3(x2).detach()
-            x4 = self.layer4(x3).detach()
-        else:
-            x2 = self.layer2(x1)
-            x3 = self.layer3(x2)
-            x4 = self.layer4(x3)
+        x2 = self.layer2(x1)
+        x3 = self.layer3(x2)
+        x4 = self.layer4(x3)
 
         image_predict = self.avgpool(x4)
         image_predict = image_predict.squeeze()
         if len(image_predict.shape) == 1:
             image_predict = image_predict.unsqueeze(0)
-
-        verb_predict = self.fc(image_predict)
-        verb_guess = torch.argmax(verb_predict, dim=1)
-        verb_loss = self.loss_function(verb_predict, verb)
-        if self.training:
-            previous_word = self.verb_embeding(verb.long())
-        else:
-            previous_word = self.verb_embeding(verb_guess)
 
         # Get feature pyramid
         features = self.fpn([x2, x3, x4])
@@ -304,6 +289,17 @@ class ResNet_RetinaNet_RNN(nn.Module):
         # init LSTM inputs
         hx, cx = torch.zeros(batch_size, 1024).cuda(x.device), torch.zeros(batch_size, 1024).cuda(x.device)
         previous_box_embed = torch.zeros(batch_size, 64).cuda(x.device)
+        previous_word = torch.zeros(batch_size, 512).cuda(x.device)
+
+        rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
+        hx, cx = self.rnn(rnn_input, (hx, cx))
+        verb_predict = self.fc_verb(hx)
+        verb_guess = torch.argmax(verb_predict, dim=1)
+        verb_loss = self.loss_function(verb_predict, verb)
+        if self.training:
+            previous_word = self.verb_embeding(verb.long())
+        else:
+            previous_word = self.verb_embeding(verb_guess)
 
 
         # init losses
@@ -326,11 +322,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
 
-            just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
-            rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
-            rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
-            #rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
-
+            rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
             regression = torch.cat([self.regressionModel(rnn_and_features) for rnn_and_features in rnn_feature_shapes], dim=1)
 
             classifications = []
@@ -354,7 +346,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             class_boxes = classification[torch.arange(batch_size), best_bbox, :]
             classification_guess = torch.argmax(class_boxes, dim=1)
 
-            if self.training and use_gt_nouns:
+            if self.training:
                 ground_truth_1 = self.noun_embedding(annotations[:, i, -1].long())
                 ground_truth_2 = self.noun_embedding(annotations[:, i, -2].long())
                 ground_truth_3 = self.noun_embedding(annotations[:, i, -3].long())
@@ -408,9 +400,9 @@ class ResNet_RetinaNet_RNN(nn.Module):
         if self.training:
             anns = annotations[:, :, :].unsqueeze(1)
 
-            classification_all = torch.cat([c.unsqueeze(1) for c in class_list], dim=1)
-            regression_all = torch.cat([c.unsqueeze(1) for c in reg_list], dim=1)
-            bbox_exist_all = torch.cat([c.unsqueeze(1) for c in bbox_pred_list], dim=1)
+            classification_all = torch.cat([c.unsqueeze(1) for c in class_list], dim = 1)
+            regression_all = torch.cat([c.unsqueeze(1) for c in reg_list], dim = 1)
+            bbox_exist_all = torch.cat([c.unsqueeze(1) for c in bbox_pred_list], dim = 1)
 
             class_loss, reg_loss, bbox_loss = self.focalLoss(classification_all, regression_all, anchors, bbox_exist_all, anns.squeeze())
             all_class_loss += class_loss
@@ -453,9 +445,9 @@ def resnet50(num_classes, pretrained=False, **kwargs):
     if pretrained:
         state_dict = model_zoo.load_url(model_urls['resnet50'], model_dir='.')
         print("state dict")
-        x = nn.Linear(2048, 504)
-        state_dict['fc.weight'] = x.weight
-        state_dict['fc.bias'] = x.bias
+        # x = nn.Linear(2048, 504)
+        # state_dict['fc.weight'] = x.weight
+        # state_dict['fc.bias'] = x.bias
         model.load_state_dict(state_dict, strict=False)
     return model
 

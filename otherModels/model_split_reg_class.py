@@ -77,10 +77,9 @@ class PyramidFeatures(nn.Module):
         # return [P4_x, P5_x, P6_x, P7_x]
 
 
-class RegressionModel(nn.Module):
+class RegressionModel_part1(nn.Module):
     def __init__(self, num_features_in, num_anchors=9, feature_size=256):
-        super(RegressionModel, self).__init__()
-
+        super(RegressionModel_part1, self).__init__()
         self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
@@ -89,7 +88,6 @@ class RegressionModel(nn.Module):
         self.act3 = nn.ReLU()
         self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act4 = nn.ReLU()
-        self.output = nn.Conv2d(feature_size, num_anchors * 4, kernel_size=3, padding=1)
 
     def forward(self, x):
         out = self.conv1(x)
@@ -97,19 +95,28 @@ class RegressionModel(nn.Module):
         out = self.conv2(out)
         out = self.act2(out)
         out = self.conv3(out)
-
         out = self.act3(out)
         out = self.conv4(out)
         out1 = self.act4(out)
-        out = self.output(out1)
-        # out is B x C x W x H, with C = 4*num_anchors
-        out = out.permute(0, 2, 3, 1)
+        return out1
+
+
+class RegressionModel_part2(nn.Module):
+    def __init__(self, num_anchors=9, feature_size=256):
+        super(RegressionModel_part2, self).__init__()
+        self.output = nn.Conv2d(feature_size, num_anchors * 4, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        #x = x * rnn_features
+
+        out = self.output(x)
+        out = out.permute(0, 2, 3, 1)  # out is B x C x W x H, with C = 4*num_anchors
         return out.contiguous().view(out.shape[0], -1, 4)
 
 
-class ClassificationModel(nn.Module):
+class ClassificationModel_part1(nn.Module):
     def __init__(self, num_features_in, num_anchors=9, num_classes=80, prior=0.01, feature_size=256):
-        super(ClassificationModel, self).__init__()
+        super(ClassificationModel_part1, self).__init__()
         self.num_classes = num_classes
         self.num_anchors = num_anchors
         self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
@@ -119,12 +126,7 @@ class ClassificationModel(nn.Module):
         self.conv3 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act3 = nn.ReLU()
         self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
-        self.act4 = nn.ReLU()
-        self.pool = torch.nn.AdaptiveMaxPool2d((1, 1))
-        self.features_linear = nn.Linear(feature_size, 1)
-        # self.act_binary = nn.Sigmoid()
-        self.output_retina = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
-        self.output_act_retina = nn.Sigmoid()
+        #self.act4 = nn.ReLU()
 
     def forward(self, x):
         out = self.conv1(x)
@@ -132,12 +134,35 @@ class ClassificationModel(nn.Module):
         out = self.conv2(out)
         out = self.act2(out)
         out = self.conv3(out)
-
         out = self.act3(out)
         out = self.conv4(out)
+        #out = self.act4(out)
+        return out
+
+
+class ClassificationModel_part2(nn.Module):
+    def __init__(self, num_anchors=9, num_classes=80, prior=0.01, feature_size=256):
+        super(ClassificationModel_part2, self).__init__()
+        self.num_anchors = num_anchors
+        self.num_classes = num_classes
+
+        self.pool = torch.nn.AdaptiveMaxPool2d((1, 1))
+        self.features_linear = nn.Linear(feature_size, 1)
+        # self.act_binary = nn.Sigmoid()
+
+        self.output_retina = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
+        self.output_act_retina = nn.Sigmoid()
+
+        self.act4 = nn.ReLU()
+
+
+    def forward(self, out):
+        #out = out * rnn_features
+
         # BBox Binary Logit
         bbox_exists = self.pool(out).squeeze()
         bbox_exists = self.features_linear(bbox_exists)
+        #bbox_exists = self.act_binary(bbox_exists)
 
         # Classification Branch
         out = self.act4(out)
@@ -146,7 +171,8 @@ class ClassificationModel(nn.Module):
         out1 = out1.permute(0, 2, 3, 1)  # out is B x C x W x H, with C = n_classes + n_anchors
         batch_size, width, height, channels = out1.shape
         out2 = out1.view(batch_size, width, height, self.num_anchors, self.num_classes)
-        return out2.contiguous().view(x.shape[0], -1, self.num_classes), bbox_exists
+
+        return out2.contiguous().view(out.shape[0], -1, self.num_classes), bbox_exists
 
 
 class ResNet_RetinaNet_RNN(nn.Module):
@@ -158,8 +184,10 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self._init_resnet(block, layers)
         self.fpn = PyramidFeatures(self.fpn_sizes[0], self.fpn_sizes[1], self.fpn_sizes[2])
 
-        self.regressionModel = RegressionModel(768)
-        self.classificationModel = ClassificationModel(768, num_classes=num_classes)
+        self.regressionModel_1 = RegressionModel_part1(256)
+        self.regressionModel_2 = RegressionModel_part2()
+        self.classificationModel_1 = ClassificationModel_part1(256, num_classes=num_classes)
+        self.classificationModel_2 = ClassificationModel_part2(num_classes=num_classes)
         #self.classificationModel = ClassificationModel(256, num_classes=num_classes)
 
         self.anchors = Anchors()
@@ -192,11 +220,11 @@ class ResNet_RetinaNet_RNN(nn.Module):
         # fill class/reg branches with weights
         prior = 0.01
 
-        self.classificationModel.output_retina.weight.data.fill_(0)
-        self.classificationModel.output_retina.bias.data.fill_(-math.log((1.0 - prior) / prior))
+        self.classificationModel_2.output_retina.weight.data.fill_(0)
+        self.classificationModel_2.output_retina.bias.data.fill_(-math.log((1.0 - prior) / prior))
 
-        self.regressionModel.output.weight.data.fill_(0)
-        self.regressionModel.output.bias.data.fill_(0)
+        self.regressionModel_2.output.weight.data.fill_(0)
+        self.regressionModel_2.output.bias.data.fill_(0)
 
         self.freeze_bn()
         self.loss_function = nn.CrossEntropyLoss()
@@ -256,8 +284,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
 
-    def forward(self, inputs, detach_resnet=False, use_gt_nouns=False):
-
+    def forward(self, inputs, return_all_scores=False):
 
         if self.training:
             img_batch, annotations, verb, widths, heights = inputs
@@ -273,15 +300,9 @@ class ResNet_RetinaNet_RNN(nn.Module):
         x = self.maxpool(x)
 
         x1 = self.layer1(x)
-
-        if detach_resnet:
-            x2 = self.layer2(x1).detach()
-            x3 = self.layer3(x2).detach()
-            x4 = self.layer4(x3).detach()
-        else:
-            x2 = self.layer2(x1)
-            x3 = self.layer3(x2)
-            x4 = self.layer4(x3)
+        x2 = self.layer2(x1)
+        x3 = self.layer3(x2)
+        x4 = self.layer4(x3)
 
         image_predict = self.avgpool(x4)
         image_predict = image_predict.squeeze()
@@ -320,23 +341,22 @@ class ResNet_RetinaNet_RNN(nn.Module):
             bbox_predicts = []
             bbox_exist_list = []
 
+        self.regression_inputs = [self.regressionModel_1(features[ii]) for ii in range(len(features))]
+        self.classification_inputs = [self.classificationModel_1(features[ii]) for ii in range(len(features))]
+
 
         for i in range(6):
             rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
 
-            just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
-            rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
-            rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
-            #rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
-
-            regression = torch.cat([self.regressionModel(rnn_and_features) for rnn_and_features in rnn_feature_shapes], dim=1)
+            rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(self.regression_inputs[ii].shape) for ii in range(len(self.regression_inputs))]
+            regression = torch.cat([self.regressionModel_2(rnn_feature_shapes[ii] * self.regression_inputs[ii]) for ii in range(len(features))], dim=1)
 
             classifications = []
             bbox_exist = []
-            for ii in range(len(rnn_feature_shapes)):
-                classication = self.classificationModel(rnn_feature_shapes[ii])
+            for ii in range(len(features)):
+                classication = self.classificationModel_2(rnn_feature_shapes[ii] * self.classification_inputs[ii])
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
 
@@ -354,7 +374,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             class_boxes = classification[torch.arange(batch_size), best_bbox, :]
             classification_guess = torch.argmax(class_boxes, dim=1)
 
-            if self.training and use_gt_nouns:
+            if self.training:
                 ground_truth_1 = self.noun_embedding(annotations[:, i, -1].long())
                 ground_truth_2 = self.noun_embedding(annotations[:, i, -2].long())
                 ground_truth_3 = self.noun_embedding(annotations[:, i, -3].long())
@@ -408,9 +428,9 @@ class ResNet_RetinaNet_RNN(nn.Module):
         if self.training:
             anns = annotations[:, :, :].unsqueeze(1)
 
-            classification_all = torch.cat([c.unsqueeze(1) for c in class_list], dim=1)
-            regression_all = torch.cat([c.unsqueeze(1) for c in reg_list], dim=1)
-            bbox_exist_all = torch.cat([c.unsqueeze(1) for c in bbox_pred_list], dim=1)
+            classification_all = torch.cat([c.unsqueeze(1) for c in class_list], dim = 1)
+            regression_all = torch.cat([c.unsqueeze(1) for c in reg_list], dim = 1)
+            bbox_exist_all = torch.cat([c.unsqueeze(1) for c in bbox_pred_list], dim = 1)
 
             class_loss, reg_loss, bbox_loss = self.focalLoss(classification_all, regression_all, anchors, bbox_exist_all, anns.squeeze())
             all_class_loss += class_loss

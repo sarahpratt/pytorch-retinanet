@@ -35,6 +35,9 @@ def main(args=None):
 	parser.add_argument('--title', type=str, default='')
 	parser.add_argument("--resume_model", type=str, default="")
 	parser.add_argument("--resume_epoch", type=int, default=0)
+	parser.add_argument("--detach_epoch", type=int, default=15)
+	parser.add_argument("--gt_noun_epoch", type=int, default=9)
+	parser.add_argument("--lr_decrease_epoch", type=int, default=25)
 	parser.add_argument("--reinit-classifier", action="store_true", default=False)
 	parser.add_argument("--lr", type=float, default=.00001)
 	parser.add_argument("--all-box-regression", action="store_true", default=False)
@@ -129,11 +132,19 @@ def main(args=None):
 		retinanet.training = True
 
 		now = time.time()
-
 		all_data_time = 0.0
 		all_model_time = 0.0
 		all_backward_time = 0.0
 		all_time = 0.0
+
+		deatch_resnet = parser.detach_epoch > epoch_num
+		use_gt_nouns = parser.gt_noun_epoch > epoch_num
+
+		if epoch_num == parser.lr_decrease_epoch:
+			lr = parser.lr/10
+
+			for param_group in optimizer.param_groups:
+				param_group["lr"] = lr
 
 		for iter_num, data in enumerate(dataloader_train):
 			i += 1
@@ -148,7 +159,7 @@ def main(args=None):
 			all_data_time += time.time() - now
 			now1 = time.time()
 
-			class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs, widths, heights])
+			class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs, widths, heights], deatch_resnet, use_gt_nouns)
 
 			all_model_time += time.time() - now1
 			now1 = time.time()
@@ -211,10 +222,10 @@ def main(args=None):
 
 			now = time.time()
 
+		if epoch_num % 5 == 0:
+			torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
 
-		torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
-
-		if epoch_num%1 == 0:
+		if epoch_num%2 == 0:
 			evaluator = BboxEval()
 			print('Evaluating dataset')
 			retinanet.training = False
