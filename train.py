@@ -129,8 +129,8 @@ def main(args=None):
 	retinanet.train()
 	retinanet.module.freeze_bn()
 
-	x = torch.load('./csv_retinanet_20.pth')
-	retinanet.module.load_state_dict(x)
+	# x = torch.load('./csv_retinanet_20.pth')
+	# retinanet.module.load_state_dict(x)
 
 	print('Num training images: {}'.format(len(dataset_train)))
 
@@ -200,7 +200,7 @@ def main(args=None):
 
 			retinanet.eval()
 			mAP, AP_string = csv_eval.evaluate(dataset_val, retinanet.module, score_threshold=0.1)
-			with open(log_dir + '/map_files/{}_retinanet_{}.txt'.format(parser.dataset, epoch_num), 'w') as f:
+			with open(log_dir + '/map_files/retinanet_{}.txt'.format(epoch_num), 'w') as f:
 				f.write(AP_string)
 			total = 0.0
 			all = 0.0
@@ -216,7 +216,7 @@ def main(args=None):
 		scheduler.step(np.mean(epoch_loss))
 
 
-		torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/{}_retinanet_{}.pth'.format(parser.dataset, epoch_num))
+		torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
 
 	retinanet.eval()
 
