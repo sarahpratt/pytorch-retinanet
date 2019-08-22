@@ -430,8 +430,9 @@ class Augmenter(object):
 
     def __call__(self, sample, flip_x=0.5):
 
+        image, annots, img_name = sample['img'], sample['annot'], sample['img_name']
+
         if np.random.rand() < flip_x:
-            image, annots, img_name = sample['img'], sample['annot'], sample['img_name']
             image = image[:, ::-1, :]
 
             rows, cols, channels = image.shape
@@ -444,7 +445,34 @@ class Augmenter(object):
             annots[:, 0] = cols - x2
             annots[:, 2] = cols - x_tmp
 
-            sample = {'img': image, 'annot': annots, 'img_name': img_name}
+        crop_x_left = image.shape[1] * random.random() * .3
+        crop_x_right = image.shape[1] * random.random() * .3
+        x_1 = annots[:, 2] < crop_x_left
+        x_2 = annots[:, 0] > (image.shape[1] - crop_x_right)
+
+        annots[x_1 + x_2, :4] = -1
+
+        x = annots[:, 0][annots[:, 0] != -1]
+        y = annots[:, 2][annots[:, 2] != -1]
+        annots[:, 0][annots[:, 0] != -1] = np.clip(x - crop_x_left, 0, image.shape[1] - crop_x_left - crop_x_right)
+        annots[:, 2][annots[:, 2] != -1] = np.clip(y - crop_x_left, 0, image.shape[1] - crop_x_left - crop_x_right)
+
+        crop_y_left = image.shape[0] * random.random() * .3
+        crop_y_right = image.shape[0] * random.random() * .3
+
+        x_1 = annots[:, 3] < crop_y_left
+        x_2 = annots[:, 1] > (image.shape[0] - crop_y_right)
+
+        annots[x_1 + x_2, :4] = -1
+
+        x_second = annots[:, 1][annots[:, 1] != -1]
+        y_second = annots[:, 3][annots[:, 3] != -1]
+        annots[:, 1][annots[:, 1] != -1] = np.clip(x_second - crop_y_left, 0, image.shape[0] - crop_y_left - crop_y_right)
+        annots[:, 3][annots[:, 3] != -1] = np.clip(y_second - crop_y_left, 0,  image.shape[0] - crop_y_left - crop_y_right)
+
+        image = image[int(crop_y_left):int(image.shape[0]-crop_y_right), int(crop_x_left):int(image.shape[1]-crop_x_right), :]
+
+        sample = {'img': image, 'annot': annots, 'img_name': img_name}
 
         return sample
 

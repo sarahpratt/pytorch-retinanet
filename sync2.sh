@@ -10,4 +10,4 @@ rsync -avz \
   --exclude csv_retinanet_20.pth \
   --exclude venv/ \
   --exclude output/ \
-   ../pytorch-retinanet sarahp@172.16.2.40:/home/sarahp
+   ../pytorch-retinanet sarahp@172.16.0.161:/home/sarahp
