@@ -37,7 +37,7 @@ def load_jsons():
     retinanet = retinanet.cuda()
     retinanet = torch.nn.DataParallel(retinanet).cuda()
 
-    x = torch.load('./retinanet_4.pth')
+    x = torch.load('./retinanet_20.pth')
     retinanet.module.load_state_dict(x)
     retinanet.training = False
     retinanet.eval()
@@ -77,7 +77,7 @@ def categorize_ims_by_verb(dataset_val):
 evaluator = BboxEval()
 dataset_val, dev_gt, verb_orders, all_idx_to_english, retinanet = load_jsons()
 verb_categorizations = categorize_ims_by_verb(dataset_val)
-
+retinanet.training = False
 
 option_list = []
 for key in verb_categorizations:
@@ -85,6 +85,8 @@ for key in verb_categorizations:
 
 option_list = ['random'] + sorted(option_list)
 selected_verb = st.selectbox('Pick a verb or select random to generate a random image', option_list,  value=0)
+use_gt_verb = st.radio('Predict Verb or use GT', ["GT Verb", "Predict Verb"],  value=0)
+print()
 st.button('generate')
 v = option_list[selected_verb]
 if v == 'random':
@@ -99,7 +101,10 @@ verb_idx_data = torch.tensor(data['verb_idx']).unsqueeze(0)
 widths = torch.tensor(im_data.shape[2]).unsqueeze(0).cuda().float()
 heights = torch.tensor(im_data.shape[3]).unsqueeze(0).cuda().float()
 
-verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([im_data, verb_idx_data, widths, heights])
+gt_value = use_gt_verb == 0
+retinanet.use_gt_verb = True
+verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([im_data, verb_idx_data, widths, heights], False, False, gt_value)
+
 
 image = data['img_name'].split('/')[-1]
 verb = dataset_val.idx_to_verb[verb_guess[0]]
@@ -168,6 +173,9 @@ for i in range(6):
     h = im_file.size[1]
     new_im_gt_pred = Image.new("RGB", (350, 350), 'white')
     new_im_gt_pred.paste(im_file, ((350 - width)/2, 350 - h))
+
+    if len(cap_gt) > 35:
+        cap_gt = cap_gt[:35]
 
     st.image([new_im_gt, new_im_gt_pred], caption=[cap_gt, cap_pred])
 

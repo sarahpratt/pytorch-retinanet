@@ -19,8 +19,10 @@ from dataloader import CSVDataset, collater, Resizer, AspectRatioBasedSampler, A
 from torch.utils.data import Dataset, DataLoader
 
 from imsitu_eval import BboxEval
+from format_utils import cmd_to_title
+import sys
 
-assert torch.__version__.split('.')[1] == '4'
+#assert torch.__version__.split('.')[1] == '4'
 
 print('CUDA available: {}'.format(torch.cuda.is_available()))
 
@@ -39,13 +41,222 @@ def main(args=None):
 	parser.add_argument("--gt_noun_epoch", type=int, default=9)
 	parser.add_argument("--lr_decrease_epoch", type=int, default=25)
 	parser.add_argument("--reinit-classifier", action="store_true", default=False)
+	parser.add_argument("--rnn-weights", action="store_true", default=False)
+	parser.add_argument("--augment", action="store_true", default=False)
+	parser.add_argument("--init-with-verb-warmup", action="store_true", default=False)
+	parser.add_argument("--cat-features", action="store_true", default=False)
+	parser.add_argument("--just-verb-loss", action="store_true", default=False)
 	parser.add_argument("--lr", type=float, default=.00001)
 	parser.add_argument("--all-box-regression", action="store_true", default=False)
 	parser.add_argument("--batch-size", type=int, default=16)
-
 	parser = parser.parse_args(args)
 
-	log_dir = "./runs/" + parser.title
+	writer, log_dir = init_log_dir(parser)
+	dataloader_train, dataset_train, dataloader_val, dataset_val = init_data(parser)
+
+	print("loading dev")
+	with open('./dev.json') as f:
+		dev_gt = json.load(f)
+	print("loading imsitu_dpace")
+	with open('./imsitu_space.json') as f:
+		all = json.load(f)
+		verb_orders = all['verbs']
+
+	print("loading model")
+	retinanet = create_model(parser, dataset_train)
+	retinanet.cat_features = parser.cat_features
+	retinanet = torch.nn.DataParallel(retinanet).cuda()
+	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
+
+	if parser.all_box_regression:
+		retinanet.all_box_regression = True
+
+	print('Num training images: {}'.format(len(dataset_train)))
+
+	if parser.rnn_weights:
+		load_rnn_weights(retinanet)
+
+	if parser.init_with_verb_warmup:
+		x = torch.load('./verb_warm_up.pth')
+		retinanet.module.load_state_dict(x)
+
+	#x = torch.load('./runs/lr_decrease_epoch=12_lr=.0001_detach_epoch=15_batch-size=128_2019-08-19_17:26:53/checkpoints/retinanet_10.pth')
+	# x = torch.load('./retinanet_10.pth')
+	# retinanet.module.load_state_dict(x)
+
+
+	for epoch_num in range(parser.resume_epoch, parser.epochs):
+
+		train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer)
+
+		if epoch_num % 5 == 0:
+			torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
+
+		if epoch_num%1 == 0:
+			print('Evaluating dataset')
+			evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb_orders, dev_gt, epoch_num,
+					 writer)
+
+
+	retinanet.eval()
+	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
+
+def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer):
+	retinanet.train()
+	retinanet.module.freeze_bn()
+
+	epoch_loss = []
+	i = 0
+	avg_class_loss = 0.0
+	avg_reg_loss = 0.0
+	avg_bbox_loss = 0.0
+	avg_verb_loss = 0.0
+	retinanet.training = True
+
+	deatch_resnet = parser.detach_epoch > epoch_num
+	use_gt_nouns = parser.gt_noun_epoch > epoch_num
+
+	if epoch_num == parser.lr_decrease_epoch:
+		lr = parser.lr / 10
+
+		for param_group in optimizer.param_groups:
+			param_group["lr"] = lr
+
+	for iter_num, data in enumerate(dataloader_train):
+		i += 1
+
+		optimizer.zero_grad()
+		image = data['img'].cuda().float()
+		annotations = data['annot'].cuda().float()
+		verbs = data['verb_idx'].cuda()
+		widths = data['widths'].cuda()
+		heights = data['heights'].cuda()
+
+		class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs, widths, heights],
+															   deatch_resnet, use_gt_nouns)
+
+		avg_class_loss += class_loss.mean().item()
+		avg_reg_loss += reg_loss.mean().item()
+		avg_bbox_loss += bbox_loss.mean().item()
+		avg_verb_loss += verb_loss.mean().item()
+
+		if i % 100 == 0:
+			print(
+				'Epoch: {} | Iteration: {} | Class loss: {:1.5f} | Reg loss: {:1.5f} | Verb loss: {:1.5f} | Box loss: {:1.5f}'.format(
+					epoch_num, iter_num, float(avg_class_loss / 100), float(avg_reg_loss / 100),
+					float(avg_verb_loss / 100), float(avg_bbox_loss / 100)))
+			writer.add_scalar("train/classification_loss", avg_class_loss / 100,
+							  epoch_num * len(dataloader_train) + i)
+			writer.add_scalar("train/regression_loss", avg_reg_loss / 100,
+							  epoch_num * (len(dataloader_train)) + i)
+			writer.add_scalar("train/bbox_loss", avg_bbox_loss / 100,
+							  epoch_num * (len(dataloader_train)) + i)
+			writer.add_scalar("train/verb_loss", avg_verb_loss / 100,
+							  epoch_num * (len(dataloader_train)) + i)
+
+			avg_class_loss = 0.0
+			avg_reg_loss = 0.0
+			avg_bbox_loss = 0.0
+			avg_verb_loss = 0.0
+
+		if parser.just_verb_loss:
+			loss = verb_loss.mean()
+		else:
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
+
+		if bool(loss == 0):
+			continue
+		loss.backward()
+		torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 1, norm_type="inf")
+		optimizer.step()
+
+
+def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb_orders, dev_gt, epoch_num, writer):
+	evaluator = BboxEval()
+	retinanet.training = False
+	retinanet.eval()
+	k = 0
+	for iter_num, data in enumerate(dataloader_val):
+
+		if k % 100 == 0:
+			print(str(k) + " out of " + str(len(dataset_val) / parser.batch_size))
+		k += 1
+		x = data['img'].cuda().float()
+		y = data['verb_idx'].cuda()
+		widths = data['widths'].cuda()
+		heights = data['heights'].cuda()
+
+		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights])
+		for i in range(len(verb_guess)):
+			image = data['img_name'][i].split('/')[-1]
+			verb = dataset_train.idx_to_verb[verb_guess[i]]
+			nouns = []
+			bboxes = []
+			for j in range(6):
+				if dataset_train.idx_to_class[noun_predicts[j][i]] == 'not':
+					nouns.append('')
+				else:
+					nouns.append(dataset_train.idx_to_class[noun_predicts[j][i]])
+				if bbox_exists[j][i] > 0.5:
+					bboxes.append(bbox_predicts[j][i] / data['scale'][i])
+				else:
+					bboxes.append(None)
+			verb_gt, nouns_gt, boxes_gt = get_ground_truth(image, dev_gt[image], verb_orders)
+			evaluator.update(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders)
+
+	writer.add_scalar("val/verb_acc", evaluator.verb(), epoch_num)
+	writer.add_scalar("val/value", evaluator.value(), epoch_num)
+	writer.add_scalar("val/value_all", evaluator.value_all(), epoch_num)
+	writer.add_scalar("val/value_bbox", evaluator.value_bbox(), epoch_num)
+	writer.add_scalar("val/value_all_bbox", evaluator.value_all_bbox(), epoch_num)
+
+
+def create_model(parser, dataset_train):
+	if parser.depth == 18:
+		retinanet = model.resnet18(num_classes=dataset_train.num_classes(), pretrained=True)
+	elif parser.depth == 34:
+		retinanet = model.resnet34(num_classes=dataset_train.num_classes(), pretrained=True)
+	elif parser.depth == 50:
+		retinanet = model.resnet50(num_classes=dataset_train.num_classes(), pretrained=True)
+	elif parser.depth == 101:
+		retinanet = model.resnet101(num_classes=dataset_train.num_classes(), pretrained=True)
+	elif parser.depth == 152:
+		retinanet = model.resnet152(num_classes=dataset_train.num_classes(), pretrained=True)
+	else:
+		raise ValueError('Unsupported model depth, must be one of 18, 34, 50, 101, 152')
+	return retinanet
+
+
+def init_data(parser):
+	dataset_train = CSVDataset(train_file=parser.train_file, class_list=parser.classes_file,
+							   transform=transforms.Compose([Normalizer(), Augmenter(parser.augment), Resizer()]))
+
+	if parser.val_file is None:
+		dataset_val = None
+		print('No validation annotations provided.')
+	else:
+		dataset_val = CSVDataset(train_file=parser.val_file, class_list=parser.classes_file,
+								 transform=transforms.Compose([Normalizer(), Resizer()]))
+
+	sampler = AspectRatioBasedSampler(dataset_train, batch_size=parser.batch_size, drop_last=True)
+	dataloader_train = DataLoader(dataset_train, num_workers=64, collate_fn=collater, batch_sampler=sampler)
+
+	if dataset_val is not None:
+		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=parser.batch_size, drop_last=True)
+		dataloader_val = DataLoader(dataset_val, num_workers=64, collate_fn=collater, batch_sampler=sampler_val)
+	return dataloader_train, dataset_train, dataloader_val, dataset_val
+
+
+def init_log_dir(parser):
+	if parser.title:
+		print("title detected")
+		log_dir = "./runs/" + parser.title
+	else:
+		print()
+		x = cmd_to_title(sys.argv[1:], True)
+		print(x)
+		log_dir = "./runs/" + x
+
 	writer = SummaryWriter(log_dir)
 
 	with open(log_dir + '/config.csv', 'w') as f:
@@ -61,214 +272,20 @@ def main(args=None):
 		raise ValueError('Must provide --train-file when training,')
 	if parser.classes_file is None:
 		raise ValueError('Must provide --classes-file when training')
-
-	dataset_train = CSVDataset(train_file=parser.train_file, class_list=parser.classes_file, transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
-
-	if parser.val_file is None:
-		dataset_val = None
-		print('No validation annotations provided.')
-	else:
-		dataset_val = CSVDataset(train_file=parser.val_file, class_list=parser.classes_file, transform=transforms.Compose([Normalizer(), Resizer()]))
-
-	sampler = AspectRatioBasedSampler(dataset_train, batch_size=parser.batch_size, drop_last=True)
-	dataloader_train = DataLoader(dataset_train, num_workers=64, collate_fn=collater, batch_sampler=sampler)
-
-	if dataset_val is not None:
-		sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=parser.batch_size, drop_last=True)
-		dataloader_val = DataLoader(dataset_val, num_workers=64, collate_fn=collater, batch_sampler=sampler_val)
-
-	print("loading dev")
-	with open('./dev.json') as f:
-		dev_gt = json.load(f)
-	print("loading imsitu_dpace")
-	with open('./imsitu_space.json') as f:
-		all = json.load(f)
-		verb_orders = all['verbs']
-
-	print("loading model")
-	# Create the model
-	if parser.depth == 18:
-		retinanet = model.resnet18(num_classes=dataset_train.num_classes(), pretrained=True)
-	elif parser.depth == 34:
-		retinanet = model.resnet34(num_classes=dataset_train.num_classes(), pretrained=True)
-	elif parser.depth == 50:
-		retinanet = model.resnet50(num_classes=dataset_train.num_classes(), pretrained=True)
-	elif parser.depth == 101:
-		retinanet = model.resnet101(num_classes=dataset_train.num_classes(), pretrained=True)
-	elif parser.depth == 152:
-		retinanet = model.resnet152(num_classes=dataset_train.num_classes(), pretrained=True)
-	else:
-		raise ValueError('Unsupported model depth, must be one of 18, 34, 50, 101, 152')
-
-	# use_gpu = True
-
-	# if use_gpu:
-	# 	retinanet = retinanet.cuda()
-
-	retinanet = torch.nn.DataParallel(retinanet).cuda()
-	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
-	scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
-
-	if parser.all_box_regression:
-		retinanet.all_box_regression = True
-
-	print('Num training images: {}'.format(len(dataset_train)))
-
-	# x = torch.load('./runs/stack_fpn_and_lstm/checkpoints/retinanet_2.pth')
-	# retinanet.module.load_state_dict(x)
-	# parser.resume_epoch = 3
-
-	for epoch_num in range(parser.resume_epoch, parser.epochs):
-
-		retinanet.train()
-		retinanet.module.freeze_bn()
-		
-		epoch_loss = []
-		i = 0
-		avg_class_loss = 0.0
-		avg_reg_loss = 0.0
-		avg_bbox_loss = 0.0
-		avg_verb_loss = 0.0
-		retinanet.training = True
-
-		now = time.time()
-		all_data_time = 0.0
-		all_model_time = 0.0
-		all_backward_time = 0.0
-		all_time = 0.0
-
-		deatch_resnet = parser.detach_epoch > epoch_num
-		use_gt_nouns = parser.gt_noun_epoch > epoch_num
-
-		if epoch_num == parser.lr_decrease_epoch:
-			lr = parser.lr/10
-
-			for param_group in optimizer.param_groups:
-				param_group["lr"] = lr
-
-		for iter_num, data in enumerate(dataloader_train):
-			i += 1
-
-			optimizer.zero_grad()
-			image = data['img'].cuda().float()
-			annotations = data['annot'].cuda().float()
-			verbs = data['verb_idx'].cuda()
-			widths = data['widths'].cuda()
-			heights = data['heights'].cuda()
-
-			all_data_time += time.time() - now
-			now1 = time.time()
-
-			class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs, widths, heights], deatch_resnet, use_gt_nouns)
-
-			all_model_time += time.time() - now1
-			now1 = time.time()
-
-			avg_class_loss += class_loss.mean().item()
-			avg_reg_loss += reg_loss.mean().item()
-			avg_bbox_loss += bbox_loss.mean().item()
-			avg_verb_loss += verb_loss.mean().item()
+	return writer, log_dir
 
 
-			if i % 100 == 0:
-				print(
-					'Epoch: {} | Iteration: {} | Class loss: {:1.5f} | Reg loss: {:1.5f} | Verb loss: {:1.5f} | Box loss: {:1.5f}'.format(
-						epoch_num, iter_num, float(avg_class_loss/100), float(avg_reg_loss/100),
-						float(avg_verb_loss/100), float(avg_bbox_loss/100)))
-				writer.add_scalar("train/classification_loss", avg_class_loss / 100,
-								  epoch_num * len(dataloader_train) + i)
-				writer.add_scalar("train/regression_loss", avg_reg_loss / 100,
-								  epoch_num * (len(dataloader_train)) + i)
-				writer.add_scalar("train/bbox_loss", avg_bbox_loss / 100,
-								  epoch_num * (len(dataloader_train)) + i)
-				writer.add_scalar("train/verb_loss", avg_verb_loss / 100,
-								  epoch_num * (len(dataloader_train)) + i)
+def load_rnn_weights(retinanet):
+	x = torch.load('./best_39.pth.tar')
+	just_resnet_weights = {}
+	for weight in x['state_dict']:
+		if 'feature_extractor' in weight and 'fc' not in weight:
+			weight_in_model = weight.split('feature_extractor.')[-1]
+			just_resnet_weights[weight_in_model] = x['state_dict'][weight]
+	model_dict = retinanet.module.state_dict()
+	model_dict.update(just_resnet_weights)
+	retinanet.module.load_state_dict(model_dict)
 
-				avg_class_loss = 0.0
-				avg_reg_loss = 0.0
-				avg_bbox_loss = 0.0
-				avg_verb_loss = 0.0
-				# print(time.time() - now)
-				# now = time.time()
-
-				# print("data")
-				# print(all_data_time/10.0)
-				# print("model")
-				# print(all_model_time / 10.0)
-				# print("backward")
-				# print(all_backward_time / 10.0)
-				# print("all")
-				# print(all_time / 10.0)
-
-				all_data_time = 0.0
-				all_model_time = 0.0
-				all_backward_time = 0.0
-				all_time = 0.0
-
-			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
-			#loss = verb_loss.mean()
-
-			#epoch_loss.append(loss)
-
-			if bool(loss == 0):
-				continue
-			loss.backward()
-			torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 1, norm_type="inf")
-			optimizer.step()
-
-			all_backward_time +=  time.time() - now1
-
-			all_time += time.time() - now
-
-			now = time.time()
-
-		if epoch_num % 5 == 0:
-			torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
-
-		if epoch_num%2 == 0:
-			evaluator = BboxEval()
-			print('Evaluating dataset')
-			retinanet.training = False
-			retinanet.eval()
-			k = 0
-			for iter_num, data in enumerate(dataloader_val):
-
-				if k%100 == 0:
-					print(str(k) + " out of " + str(len(dataset_val)/parser.batch_size))
-				k += 1
-				x = data['img'].cuda().float()
-				y = data['verb_idx'].cuda()
-				widths = data['widths'].cuda()
-				heights = data['heights'].cuda()
-
-				verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights])
-				for i in range(len(verb_guess)):
-					image = data['img_name'][i].split('/')[-1]
-					verb = dataset_train.idx_to_verb[verb_guess[i]]
-					nouns = []
-					bboxes = []
-					for j in range(6):
-						if dataset_train.idx_to_class[noun_predicts[j][i]] == 'not':
-							nouns.append('')
-						else:
-							nouns.append(dataset_train.idx_to_class[noun_predicts[j][i]])
-						if bbox_exists[j][i] > 0.5:
-							bboxes.append(bbox_predicts[j][i] / data['scale'][i])
-						else:
-							bboxes.append(None)
-					verb_gt, nouns_gt, boxes_gt = get_ground_truth(image, dev_gt[image], verb_orders)
-					evaluator.update(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders)
-
-			writer.add_scalar("val/verb_acc", evaluator.verb(), epoch_num)
-			writer.add_scalar("val/value", evaluator.value(), epoch_num)
-			writer.add_scalar("val/value_all", evaluator.value_all(), epoch_num)
-			writer.add_scalar("val/value_bbox", evaluator.value_bbox(), epoch_num)
-			writer.add_scalar("val/value_all_bbox", evaluator.value_all_bbox(), epoch_num)
-
-		#epoch_loss = torch.Tensor(epoch_loss)
-		#scheduler.step(epoch_loss.mean())
-	retinanet.eval()
-	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
 
 def get_ground_truth(image, image_info, verb_orders):
 	verb = image.split("_")[0]

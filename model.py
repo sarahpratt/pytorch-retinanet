@@ -6,16 +6,16 @@ import torch.utils.model_zoo as model_zoo
 from utils import BasicBlock, Bottleneck, BBoxTransform, ClipBoxes
 from anchors import Anchors
 import losses
-from lib.nms.pth_nms import pth_nms
+# from lib.nms.pth_nms import pth_nms
 import torch.nn.functional as F
 import pdb
 
 
-def nms(dets, thresh):
-    "Dispatch to either CPU or GPU NMS implementations.\
-    Accept dets as tensor"""
-
-    return pth_nms(dets, thresh)
+# def nms(dets, thresh):
+#     "Dispatch to either CPU or GPU NMS implementations.\
+#     Accept dets as tensor"""
+#
+#     return pth_nms(dets, thresh)
 
 
 model_urls = {
@@ -151,22 +151,26 @@ class ClassificationModel(nn.Module):
 
 class ResNet_RetinaNet_RNN(nn.Module):
 
-    def __init__(self, num_classes, block, layers, bbox_embedding=True):
+    def __init__(self, num_classes, block, layers, cat_features=False):
         self.inplanes = 64
         super(ResNet_RetinaNet_RNN, self).__init__()
 
         self._init_resnet(block, layers)
         self.fpn = PyramidFeatures(self.fpn_sizes[0], self.fpn_sizes[1], self.fpn_sizes[2])
 
-        self.regressionModel = RegressionModel(768)
-        self.classificationModel = ClassificationModel(768, num_classes=num_classes)
+        if cat_features:
+            self.regressionModel = RegressionModel(768)
+            self.classificationModel = ClassificationModel(768, num_classes=num_classes)
+        else:
+            self.regressionModel = RegressionModel(256)
+            self.classificationModel = ClassificationModel(256, num_classes=num_classes)
         #self.classificationModel = ClassificationModel(256, num_classes=num_classes)
 
         self.anchors = Anchors()
         self.regressBoxes = BBoxTransform()
         self.clipBoxes = ClipBoxes()
         self.focalLoss = losses.FocalLoss()
-        self.bbox_embedding = bbox_embedding
+        self.cat_features = cat_features
 
         self._convs_and_bn_weights()
 
@@ -256,8 +260,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
 
-    def forward(self, inputs, detach_resnet=False, use_gt_nouns=False):
-
+    def forward(self, inputs, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
 
         if self.training:
             img_batch, annotations, verb, widths, heights = inputs
@@ -291,7 +294,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
         verb_predict = self.fc(image_predict)
         verb_guess = torch.argmax(verb_predict, dim=1)
         verb_loss = self.loss_function(verb_predict, verb)
-        if self.training:
+        if self.training or use_gt_verb:
             previous_word = self.verb_embeding(verb.long())
         else:
             previous_word = self.verb_embeding(verb_guess)
@@ -326,10 +329,13 @@ class ResNet_RetinaNet_RNN(nn.Module):
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
 
-            just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
-            rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
-            rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
-            #rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
+            if self.cat_features:
+                just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
+                rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
+                rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
+            else:
+                rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
+
 
             regression = torch.cat([self.regressionModel(rnn_and_features) for rnn_and_features in rnn_feature_shapes], dim=1)
 
@@ -348,11 +354,13 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
             # get max from K x A x W x H to get max classificiation and bbox
             classification = torch.cat([c for c in classifications], dim=1)
-            best_per_box = torch.max(classification, dim=2)[0]
+            #pdb.set_trace()
+            #print(classification)
+            best_per_box = torch.max(classification[:, :, :-2], dim=2)[0]
             best_bbox = torch.argmax(best_per_box, dim=1)
 
             class_boxes = classification[torch.arange(batch_size), best_bbox, :]
-            classification_guess = torch.argmax(class_boxes, dim=1)
+            classification_guess = torch.argmax(class_boxes[:, :-2], dim=1)
 
             if self.training and use_gt_nouns:
                 ground_truth_1 = self.noun_embedding(annotations[:, i, -1].long())
@@ -369,32 +377,31 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
                 previous_boxes = transformed_anchors[torch.arange(batch_size), best_bbox, :]
 
-            if self.bbox_embedding:
-                prev_heights = (previous_boxes[:, 2] - previous_boxes[:, 0]) / heights
-                prev_widths = (previous_boxes[:, 3] - previous_boxes[:, 1]) / widths
-                prev_ctr_y = previous_boxes[:, 0] / heights + 0.5 * prev_heights
-                prev_ctr_x = previous_boxes[:, 1] / widths + 0.5 * prev_widths
+            prev_heights = (previous_boxes[:, 2] - previous_boxes[:, 0]) / heights
+            prev_widths = (previous_boxes[:, 3] - previous_boxes[:, 1]) / widths
+            prev_ctr_y = previous_boxes[:, 0] / heights + 0.5 * prev_heights
+            prev_ctr_x = previous_boxes[:, 1] / widths + 0.5 * prev_widths
 
-                prev_widths = torch.ceil(prev_widths * 10).long()
-                prev_heights = torch.ceil(prev_heights * 10).long()
-                prev_ctr_x = torch.ceil(prev_ctr_x * 10).long()
-                prev_ctr_y = torch.ceil(prev_ctr_y * 10).long()
+            prev_widths = torch.ceil(prev_widths * 10).long()
+            prev_heights = torch.ceil(prev_heights * 10).long()
+            prev_ctr_x = torch.ceil(prev_ctr_x * 10).long()
+            prev_ctr_y = torch.ceil(prev_ctr_y * 10).long()
 
-                prev_widths = torch.clamp(prev_widths, 0, 10)
-                prev_heights = torch.clamp(prev_heights, 0, 10)
-                prev_ctr_x = torch.clamp(prev_ctr_x, 0, 10)
-                prev_ctr_y = torch.clamp(prev_ctr_y, 0, 10)
+            prev_widths = torch.clamp(prev_widths, 0, 10)
+            prev_heights = torch.clamp(prev_heights, 0, 10)
+            prev_ctr_x = torch.clamp(prev_ctr_x, 0, 10)
+            prev_ctr_y = torch.clamp(prev_ctr_y, 0, 10)
 
-                if not self.training:
-                    bbox_exist = torch.sigmoid(bbox_exist)
-                    prev_widths[bbox_exist < 0.5] = 0
-                    prev_heights[bbox_exist < 0.5] = 0
-                    prev_ctr_x[bbox_exist < 0.5] = 0
-                    prev_ctr_y[bbox_exist < 0.5] = 0
+            if not self.training:
+                bbox_exist = torch.sigmoid(bbox_exist)
+                prev_widths[bbox_exist < 0.5] = 0
+                prev_heights[bbox_exist < 0.5] = 0
+                prev_ctr_x[bbox_exist < 0.5] = 0
+                prev_ctr_y[bbox_exist < 0.5] = 0
 
-                previous_box_embed = torch.cat(
-                    [self.bbox_width_embed(prev_widths), self.bbox_height_embed(prev_heights),
-                     self.bbox_x_embed(prev_ctr_x), self.bbox_y_embed(prev_ctr_y)], dim=1)
+            previous_box_embed = torch.cat(
+                [self.bbox_width_embed(prev_widths), self.bbox_height_embed(prev_heights),
+                 self.bbox_x_embed(prev_ctr_x), self.bbox_y_embed(prev_ctr_y)], dim=1)
 
             if self.training:
                 class_list.append(classification)
@@ -419,6 +426,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
             return all_class_loss, all_reg_loss, verb_loss, all_bbox_loss
         else:
+            if use_gt_verb:
+                return verb, noun_predicts, bbox_predicts, bbox_exist_list
             return verb_guess, noun_predicts, bbox_predicts, bbox_exist_list
 
 
@@ -449,7 +458,7 @@ def resnet50(num_classes, pretrained=False, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet_RetinaNet_RNN(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs)
+    model = ResNet_RetinaNet_RNN(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs, cat_features=True)
     if pretrained:
         state_dict = model_zoo.load_url(model_urls['resnet50'], model_dir='.')
         print("state dict")
