@@ -157,7 +157,11 @@ class BboxEval:
         img = np.float32(img)
 
         if b is not None and b[0] != -1:
-            cv2.rectangle(img, (b[0], b[1]), (b[2], b[3]), color, 6)
+            cv2.rectangle(img, (b[0], b[1]), (b[2], b[3]), (0,0,0), 15)
+            cv2.rectangle(img, (b[0], b[1]), (b[2], b[3]), color, 10)
+        else:
+            cv2.putText(img, "None", (20, 50), cv2.FONT_HERSHEY_PLAIN, 6, (0, 0, 0), 15)
+            cv2.putText(img, "None", (20, 50), cv2.FONT_HERSHEY_PLAIN, 6, color, 7)
 
         img = Image.fromarray(np.uint8(img))
         return img
@@ -169,6 +173,7 @@ class BboxEval:
             return True
         if boxA is None or boxB is None:
             return False
+        boxB = [b / 2.0 for b in boxB]
         xA = max(boxA[0], boxB[0])
         yA = max(boxA[1], boxB[1])
         xB = min(boxA[2], boxB[2])

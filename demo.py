@@ -37,13 +37,12 @@ def load_jsons():
     retinanet = retinanet.cuda()
     retinanet = torch.nn.DataParallel(retinanet).cuda()
 
-    x = torch.load('./retinanet_20.pth')
+    x = torch.load('./retinanet_25.pth')
     retinanet.module.load_state_dict(x)
     retinanet.training = False
     retinanet.eval()
 
     return dataset_val, dev_gt, verb_orders, all_idx_to_english, retinanet
-
 
 
 def get_ground_truth(image, image_info, verb_orders):
@@ -62,6 +61,12 @@ def get_ground_truth(image, image_info, verb_orders):
             bboxes.append(b)
     return verb, nouns, bboxes
 
+def get_color(evaluator, boxes, gt_box, nouns, gt_nouns):
+    if nouns in gt_nouns and (evaluator.bb_intersection_over_union(boxes, gt_box)):
+        return (0, 255, 0)
+    return (255, 15, 119)
+
+
 @st.cache
 def categorize_ims_by_verb(dataset_val):
     verb_categorizations = defaultdict(list)
@@ -73,10 +78,19 @@ def categorize_ims_by_verb(dataset_val):
     return verb_categorizations
 
 
+@st.cache
+def load_baselines():
+    with open('./baseline_files/gt_baseline_fixed.json') as f:
+        gt = json.load(f)
+    with open('./baseline_files/top1_baseline_fixed.json') as f:
+        top1 = json.load(f)
+    return gt, top1
+
 
 evaluator = BboxEval()
 dataset_val, dev_gt, verb_orders, all_idx_to_english, retinanet = load_jsons()
 verb_categorizations = categorize_ims_by_verb(dataset_val)
+gt_baseline, top1_baseline = load_baselines()
 retinanet.training = False
 
 option_list = []
@@ -101,12 +115,21 @@ verb_idx_data = torch.tensor(data['verb_idx']).unsqueeze(0)
 widths = torch.tensor(im_data.shape[2]).unsqueeze(0).cuda().float()
 heights = torch.tensor(im_data.shape[3]).unsqueeze(0).cuda().float()
 
+image = data['img_name'].split('/')[-1]
+
 gt_value = use_gt_verb == 0
 retinanet.use_gt_verb = True
 verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([im_data, verb_idx_data, widths, heights], False, False, gt_value)
 
+if gt_value:
+    baseline = gt_baseline[image]
+else:
+    baseline = top1_baseline[image]
 
-image = data['img_name'].split('/')[-1]
+baseline_verb = baseline['verb']
+baseline_noun = baseline['nouns']
+baseline_boxes = baseline['boxes']
+
 verb = dataset_val.idx_to_verb[verb_guess[0]]
 nouns = []
 bboxes = []
@@ -123,9 +146,11 @@ for j in range(6):
 verb_gt, nouns_gt, boxes_gt = get_ground_truth(image, dev_gt[image], verb_orders)
 evaluator.update(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders)
 order_gt = verb_orders[verb_gt]["order"]
+order_baseline = verb_orders[baseline_verb]["order"]
 order_pred = verb_orders[verb]["order"]
-color = [(255, 0, 0), (255, 128, 0), (255, 255, 0), (0, 255, 0), (0, 255, 255), (0, 0, 255)]
-st.markdown("<center><pre><big> Ground Truth: " + verb_gt + "             Predicted: " + verb + "</big></pre></center>")
+st.markdown("<center><pre>Ground Truth: " + verb_gt + "            Baseline: " + baseline_verb + "            Model: " + verb + "   " + "</pre></center>")
+
+im_size = 230
 
 for i in range(6):
 
@@ -133,52 +158,80 @@ for i in range(6):
         break
 
     if len(order_gt) <= i:
-        im_file_gt = Image.new('RGB', (350, 350), "white")
+        im_file_gt = Image.new('RGB', (im_size, im_size), "white")
         cap_gt = " "
     else:
-        im_file_gt = evaluator.visualize_for_demo(boxes_gt[i], image, color[i])
+        im_file_gt = evaluator.visualize_for_demo(boxes_gt[i], image, (255, 255, 255))
         cap_gt = order_gt[i] + ": "
         for noun in nouns_gt[i]:
             if noun == '':
-                w = 'not_applicable'
+                w = 'N/A'
             elif noun in all_idx_to_english:
                 w = all_idx_to_english[noun]['gloss'][0]
             else:
                 w = noun
             cap_gt += w + ", "
 
+
+    if len(order_baseline) <= i:
+        im_file_baseline = Image.new('RGB', (im_size, im_size), "white")
+        cap_baseline = " "
+    else:
+        print(baseline_boxes[i])
+        print(image)
+        if baseline_boxes[i] == 'None':
+            bbox = None
+        else:
+            bbox = [item*2 for item in baseline_boxes[i]]
+        color = get_color(evaluator, bbox, boxes_gt[i], baseline_noun[i], nouns_gt[i])
+        im_file_baseline = evaluator.visualize_for_demo(bbox, image, color)
+        if baseline_noun[i] == '':
+            w = 'N/A'
+        elif baseline_noun[i] in all_idx_to_english:
+            w = all_idx_to_english[baseline_noun[i]]['gloss'][0]
+        else:
+            w = baseline_noun[i]
+        cap_baseline = order_baseline[i] + ": " + w
+
+
     if len(order_pred) <= i:
-        im_file = Image.new('RGB', (350, 350), "white")
+        im_file = Image.new('RGB', (im_size, im_size), "white")
         cap_pred = " "
     else:
-        im_file = evaluator.visualize_for_demo(bboxes[i], image, color[i])
+        color = get_color(evaluator, bboxes[i], boxes_gt[i], nouns[i], nouns_gt[i])
+        im_file = evaluator.visualize_for_demo(bboxes[i], image, color)
         if nouns[i] == '':
-            w = 'not_applicable'
+            w = 'N/A'
         elif nouns[i] in all_idx_to_english:
             w = all_idx_to_english[nouns[i]]['gloss'][0]
         else:
             w = nouns[i]
         cap_pred = order_pred[i] + ": " + w
 
-    size = 350, 350
 
-    im_file_gt.thumbnail(size, Image.ANTIALIAS)
-    im_file.thumbnail(size, Image.ANTIALIAS)
+    im_file_gt.thumbnail((im_size, im_size), Image.ANTIALIAS)
+    im_file_baseline.thumbnail((im_size, im_size), Image.ANTIALIAS)
+    im_file.thumbnail((im_size, im_size), Image.ANTIALIAS)
+
     width = im_file_gt.size[0]
     h = im_file_gt.size[1]
-    new_im_gt = Image.new("RGB", (350, 350), 'white')
-    new_im_gt.paste(im_file_gt, ((350 - width)/2, 350 - h))
+    new_im_gt = Image.new("RGB", (im_size, im_size), 'white')
+    new_im_gt.paste(im_file_gt, (int((im_size - width)/2), int(im_size - h)))
+
+    width = im_file_baseline.size[0]
+    h = im_file_baseline.size[1]
+    new_im_gt_baseline = Image.new("RGB", (im_size, im_size), 'white')
+    new_im_gt_baseline.paste(im_file_baseline, (int((im_size - width) / 2), int(im_size - h)))
 
     width = im_file.size[0]
     h = im_file.size[1]
-    new_im_gt_pred = Image.new("RGB", (350, 350), 'white')
-    new_im_gt_pred.paste(im_file, ((350 - width)/2, 350 - h))
+    new_im_gt_pred = Image.new("RGB", (im_size, im_size), 'white')
+    new_im_gt_pred.paste(im_file, (int((im_size - width)/2), int(im_size - h)))
 
-    if len(cap_gt) > 35:
-        cap_gt = cap_gt[:35]
-
-    st.image([new_im_gt, new_im_gt_pred], caption=[cap_gt, cap_pred])
+    if len(cap_gt) > 20:
+        cap_gt = cap_gt[:20]
 
 
+    st.image([new_im_gt, new_im_gt_baseline, new_im_gt_pred], caption=[cap_gt, cap_baseline, cap_pred])
 
 

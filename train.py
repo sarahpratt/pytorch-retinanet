@@ -81,16 +81,16 @@ def main(args=None):
 		retinanet.module.load_state_dict(x)
 
 	#x = torch.load('./runs/lr_decrease_epoch=12_lr=.0001_detach_epoch=15_batch-size=128_2019-08-19_17:26:53/checkpoints/retinanet_10.pth')
-	# x = torch.load('./retinanet_10.pth')
-	# retinanet.module.load_state_dict(x)
+	x = torch.load('./retinanet_20.pth')
+	retinanet.module.load_state_dict(x)
 
 
 	for epoch_num in range(parser.resume_epoch, parser.epochs):
 
-		train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer)
-
-		if epoch_num % 5 == 0:
-			torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
+		# train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer)
+		#
+		# if epoch_num % 5 == 0:
+		# 	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
 
 		if epoch_num%1 == 0:
 			print('Evaluating dataset')
@@ -186,7 +186,7 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 		widths = data['widths'].cuda()
 		heights = data['heights'].cuda()
 
-		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights])
+		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights], use_gt_verb=False)
 		for i in range(len(verb_guess)):
 			image = data['img_name'][i].split('/')[-1]
 			verb = dataset_train.idx_to_verb[verb_guess[i]]
@@ -285,6 +285,7 @@ def load_rnn_weights(retinanet):
 	model_dict = retinanet.module.state_dict()
 	model_dict.update(just_resnet_weights)
 	retinanet.module.load_state_dict(model_dict)
+
 
 
 def get_ground_truth(image, image_info, verb_orders):

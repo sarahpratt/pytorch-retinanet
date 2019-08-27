@@ -158,12 +158,10 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self._init_resnet(block, layers)
         self.fpn = PyramidFeatures(self.fpn_sizes[0], self.fpn_sizes[1], self.fpn_sizes[2])
 
-        if cat_features:
-            self.regressionModel = RegressionModel(768)
-            self.classificationModel = ClassificationModel(768, num_classes=num_classes)
-        else:
-            self.regressionModel = RegressionModel(256)
-            self.classificationModel = ClassificationModel(256, num_classes=num_classes)
+        self.regressionModel = RegressionModel(768)
+        self.classificationModel = ClassificationModel(768, num_classes=num_classes)
+            # self.regressionModel = RegressionModel(256)
+            # self.classificationModel = ClassificationModel(256, num_classes=num_classes)
         #self.classificationModel = ClassificationModel(256, num_classes=num_classes)
 
         self.anchors = Anchors()
@@ -329,12 +327,11 @@ class ResNet_RetinaNet_RNN(nn.Module):
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
 
-            if self.cat_features:
-                just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
-                rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
-                rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
-            else:
-                rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
+
+            just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
+            rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
+            rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
+            #rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
 
 
             regression = torch.cat([self.regressionModel(rnn_and_features) for rnn_and_features in rnn_feature_shapes], dim=1)
@@ -458,7 +455,9 @@ def resnet50(num_classes, pretrained=False, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet_RetinaNet_RNN(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs, cat_features=True)
+    #model = ResNet_RetinaNet_RNN(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs, cat_features=True)
+    model = ResNet_RetinaNet_RNN(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs)
+
     if pretrained:
         state_dict = model_zoo.load_url(model_urls['resnet50'], model_dir='.')
         print("state dict")
