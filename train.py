@@ -95,7 +95,7 @@ def main(args=None):
 
 		train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, role_tensor)
 
-		if epoch_num % 5 == 0:
+		if epoch_num % 2 == 0:
 			torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
 
 		if epoch_num%1 == 0:
@@ -256,14 +256,10 @@ def init_data(parser):
 
 
 def init_log_dir(parser):
-	if parser.title:
-		print("title detected")
-		log_dir = "./runs/" + parser.title
-	else:
-		print()
-		x = cmd_to_title(sys.argv[1:], True)
-		print(x)
-		log_dir = "./runs/" + x
+	print()
+	x = cmd_to_title(sys.argv[1:], True)
+	print(x)
+	log_dir = "./runs/" + x
 
 	writer = SummaryWriter(log_dir)
 
