@@ -258,7 +258,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
 
-    def forward(self, inputs, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
+    def forward(self, inputs, roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
 
         if self.training:
             img_batch, annotations, verb, widths, heights = inputs

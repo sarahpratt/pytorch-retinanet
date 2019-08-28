@@ -24,8 +24,8 @@ def cmd_to_dict(cmd, list_format=False):
 
     argmap["cmd"] = cmd
 
-    if "title" not in argmap:
-        argmap["title"] = dict_to_title(argmap)
+    if "full_title" not in argmap:
+        argmap["full_title"] = dict_to_title(argmap)
 
     return argmap
 
@@ -42,7 +42,7 @@ def dict_to_title(argmap):
 def cmd_to_title(cmd, list_format=False):
     """ Gets a title from a command. """
     argmap = cmd_to_dict(cmd, list_format)
-    return argmap["title"] + "_" + formatted_date()
+    return argmap["full_title"] + "_" + formatted_date()
 
 
 def formatted_date():
