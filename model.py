@@ -177,7 +177,9 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.fc = nn.Linear(2048, 504)
 
         # init embeddings
-        self.verb_embeding = nn.Embedding(504, 512)
+        self.role_embedding = nn.Embedding(191, 256)
+        self.verb_embeding = nn.Embedding(504, 256)
+        #self.verb_embeding = nn.Embedding(504, 512)
         self.noun_embedding = nn.Embedding(num_classes, 512)
         self.bbox_width_embed = nn.Embedding(11, 16)
         self.bbox_height_embed = nn.Embedding(11, 16)
@@ -258,7 +260,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
 
-    def forward(self, inputs, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
+    def forward(self, inputs, roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
 
         if self.training:
             img_batch, annotations, verb, widths, heights = inputs
@@ -321,18 +323,23 @@ class ResNet_RetinaNet_RNN(nn.Module):
             bbox_predicts = []
             bbox_exist_list = []
 
+        verb_embed = self.verb_embeding(verb.long())
+        verb_shape = [verb_embed.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
 
         for i in range(6):
-            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
-            hx, cx = self.rnn(rnn_input, (hx, cx))
-            rnn_output = self.rnn_linear(hx)
+            # rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
+            # hx, cx = self.rnn(rnn_input, (hx, cx))
+            # rnn_output = self.rnn_linear(hx)
+            #
+            #
+            # just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
+            # rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
+            # rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
+            # rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
 
-
-            just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
-            rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
-            rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
-            #rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
-
+            role_embed = self.role_embedding(roles[:, i].long())
+            role_shape = [role_embed.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
+            rnn_feature_shapes = [torch.cat([role_shape[ii], verb_shape[ii], features[ii]], dim=1) for ii in range(len(features))]
 
             regression = torch.cat([self.regressionModel(rnn_and_features) for rnn_and_features in rnn_feature_shapes], dim=1)
 

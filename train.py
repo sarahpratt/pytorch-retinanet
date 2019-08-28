@@ -13,6 +13,8 @@ import torch.optim as optim
 from torchvision import datasets, models, transforms
 from tensorboardX import SummaryWriter
 
+import warnings
+
 import math
 import model
 from dataloader import CSVDataset, collater, Resizer, AspectRatioBasedSampler, Augmenter, UnNormalizer, Normalizer
@@ -62,6 +64,10 @@ def main(args=None):
 		all = json.load(f)
 		verb_orders = all['verbs']
 
+	role_tensor = get_roles_dictionary(verb_orders, dataset_train.verb_to_idx)
+
+	warnings.filterwarnings("ignore", message="indexing with dtype torch.uint8 is now deprecated, please use a dtype torch.bool instead")
+
 	print("loading model")
 	retinanet = create_model(parser, dataset_train)
 	retinanet.cat_features = parser.cat_features
@@ -81,27 +87,27 @@ def main(args=None):
 		retinanet.module.load_state_dict(x)
 
 	#x = torch.load('./runs/lr_decrease_epoch=12_lr=.0001_detach_epoch=15_batch-size=128_2019-08-19_17:26:53/checkpoints/retinanet_10.pth')
-	x = torch.load('./retinanet_20.pth')
-	retinanet.module.load_state_dict(x)
+	# x = torch.load('./retinanet_20.pth')
+	# retinanet.module.load_state_dict(x)
 
 
 	for epoch_num in range(parser.resume_epoch, parser.epochs):
 
-		# train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer)
-		#
-		# if epoch_num % 5 == 0:
-		# 	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
+		train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, role_tensor)
+
+		if epoch_num % 5 == 0:
+			torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
 
 		if epoch_num%1 == 0:
 			print('Evaluating dataset')
 			evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb_orders, dev_gt, epoch_num,
-					 writer)
+					 writer, role_tensor)
 
 
 	retinanet.eval()
 	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
 
-def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer):
+def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, role_tensor):
 	retinanet.train()
 	retinanet.module.freeze_bn()
 
@@ -131,8 +137,9 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer):
 		verbs = data['verb_idx'].cuda()
 		widths = data['widths'].cuda()
 		heights = data['heights'].cuda()
+		roles = role_tensor[verbs].cuda()
 
-		class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs, widths, heights],
+		class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs, widths, heights], roles,
 															   deatch_resnet, use_gt_nouns)
 
 		avg_class_loss += class_loss.mean().item()
@@ -171,7 +178,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer):
 		optimizer.step()
 
 
-def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb_orders, dev_gt, epoch_num, writer):
+def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb_orders, dev_gt, epoch_num, writer, role_tensor):
 	evaluator = BboxEval()
 	retinanet.training = False
 	retinanet.eval()
@@ -185,8 +192,9 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 		y = data['verb_idx'].cuda()
 		widths = data['widths'].cuda()
 		heights = data['heights'].cuda()
+		roles = role_tensor[y].cuda()
 
-		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights], use_gt_verb=False)
+		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights], roles, use_gt_verb=True)
 		for i in range(len(verb_guess)):
 			image = data['img_name'][i].split('/')[-1]
 			verb = dataset_train.idx_to_verb[verb_guess[i]]
@@ -286,6 +294,17 @@ def load_rnn_weights(retinanet):
 	model_dict.update(just_resnet_weights)
 	retinanet.module.load_state_dict(model_dict)
 
+def get_roles_dictionary(verb_orders, verb_to_idx):
+	role_dict = {}
+	role_tensor = torch.zeros(504, 6)
+	for verb in verb_orders:
+		i = 0
+		for role in verb_orders[verb]['order']:
+			if role not in role_dict:
+				role_dict[role] = len(role_dict.keys()) + 1
+			role_tensor[verb_to_idx[verb], i] = role_dict[role]
+			i += 1
+	return role_tensor
 
 
 def get_ground_truth(image, image_info, verb_orders):

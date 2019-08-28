@@ -37,7 +37,7 @@ def load_jsons():
     retinanet = retinanet.cuda()
     retinanet = torch.nn.DataParallel(retinanet).cuda()
 
-    x = torch.load('./retinanet_25.pth')
+    x = torch.load('./retinanet_20.pth')
     retinanet.module.load_state_dict(x)
     retinanet.training = False
     retinanet.eval()
