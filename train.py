@@ -47,6 +47,7 @@ def main(args=None):
 	parser.add_argument("--augment", action="store_true", default=False)
 	parser.add_argument("--init-with-verb-warmup", action="store_true", default=False)
 	parser.add_argument("--cat-features", action="store_true", default=False)
+	parser.add_argument("--rnn-class", action="store_true", default=False)
 	parser.add_argument("--just-verb-loss", action="store_true", default=False)
 	parser.add_argument("--lr", type=float, default=.00001)
 	parser.add_argument("--all-box-regression", action="store_true", default=False)
@@ -71,6 +72,7 @@ def main(args=None):
 	print("loading model")
 	retinanet = create_model(parser, dataset_train)
 	retinanet.cat_features = parser.cat_features
+	retinanet.additional_class_branch = parser.rnn_class
 	retinanet = torch.nn.DataParallel(retinanet).cuda()
 	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
 
@@ -117,6 +119,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 	avg_reg_loss = 0.0
 	avg_bbox_loss = 0.0
 	avg_verb_loss = 0.0
+	avg_rnn_class_loss = 0.0
 	retinanet.training = True
 
 	deatch_resnet = parser.detach_epoch > epoch_num
@@ -139,13 +142,14 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		heights = data['heights'].cuda()
 		roles = role_tensor[verbs].cuda()
 
-		class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs, widths, heights], roles,
+		class_loss, reg_loss, verb_loss, bbox_loss, rnn_class_loss = retinanet([image, annotations, verbs, widths, heights], roles,
 															   deatch_resnet, use_gt_nouns)
 
 		avg_class_loss += class_loss.mean().item()
 		avg_reg_loss += reg_loss.mean().item()
 		avg_bbox_loss += bbox_loss.mean().item()
 		avg_verb_loss += verb_loss.mean().item()
+		avg_rnn_class_loss += rnn_class_loss.mean().item()
 
 		if i % 100 == 0:
 			print(
@@ -160,16 +164,19 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 							  epoch_num * (len(dataloader_train)) + i)
 			writer.add_scalar("train/verb_loss", avg_verb_loss / 100,
 							  epoch_num * (len(dataloader_train)) + i)
+			writer.add_scalar("train/rnn_class_loss", avg_rnn_class_loss / 100,
+							  epoch_num * (len(dataloader_train)) + i)
 
 			avg_class_loss = 0.0
 			avg_reg_loss = 0.0
 			avg_bbox_loss = 0.0
 			avg_verb_loss = 0.0
+			avg_rnn_class_loss = 0.0
 
 		if parser.just_verb_loss:
 			loss = verb_loss.mean()
 		else:
-			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean() + rnn_class_loss.mean()
 
 		if bool(loss == 0):
 			continue

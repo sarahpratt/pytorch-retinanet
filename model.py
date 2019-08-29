@@ -151,24 +151,27 @@ class ClassificationModel(nn.Module):
 
 class ResNet_RetinaNet_RNN(nn.Module):
 
-    def __init__(self, num_classes, block, layers, cat_features=False):
+    def __init__(self, num_classes, block, layers, cat_features=False, additional_class_branch=False):
         self.inplanes = 64
         super(ResNet_RetinaNet_RNN, self).__init__()
 
         self._init_resnet(block, layers)
         self.fpn = PyramidFeatures(self.fpn_sizes[0], self.fpn_sizes[1], self.fpn_sizes[2])
 
-        self.regressionModel = RegressionModel(256)
+        self.regressionModel = RegressionModel(768)
         self.classificationModel = ClassificationModel(768, num_classes=num_classes)
             # self.regressionModel = RegressionModel(256)
             # self.classificationModel = ClassificationModel(256, num_classes=num_classes)
         #self.classificationModel = ClassificationModel(256, num_classes=num_classes)
+
+        self.num_classes = num_classes
 
         self.anchors = Anchors()
         self.regressBoxes = BBoxTransform()
         self.clipBoxes = ClipBoxes()
         self.focalLoss = losses.FocalLoss()
         self.cat_features = cat_features
+        self.additional_class_branch = additional_class_branch
 
         self._convs_and_bn_weights()
 
@@ -190,6 +193,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
             if 'weight' in name:
                 nn.init.orthogonal_(param)
         self.rnn_linear = nn.Linear(1024, 256)
+
+        self.rnn_linear_class_prediction = nn.Linear(1024, 83)
 
         # fill class/reg branches with weights
         prior = 0.01
@@ -311,6 +316,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
         all_class_loss = 0
         all_bbox_loss = 0
         all_reg_loss = 0
+        all_rnn_class_loss = 0
 
         if self.training:
             class_list = []
@@ -334,7 +340,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             #rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
 
 
-            regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
+            regression = torch.cat([self.regressionModel(feature_shape) for feature_shape in rnn_feature_shapes], dim=1)
 
             classifications = []
             bbox_exist = []
@@ -366,6 +372,15 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 previous_word = torch.stack([ground_truth_1, ground_truth_2, ground_truth_3]).mean(dim=0)
             else:
                 previous_word = self.noun_embedding(classification_guess)
+
+            if self.additional_class_branch and self.training:
+                class_pred = self.rnn_linear_class_prediction(hx)
+                gt = torch.zeros(batch_size, self.num_classes).cuda()
+                gt[torch.arange(batch_size), annotations[:, i, -1].long()] = 1
+                gt[torch.arange(batch_size), annotations[:, i, -2].long()] = 1
+                gt[torch.arange(batch_size), annotations[:, i, -3].long()] = 1
+                #pdb.set_trace()
+                all_rnn_class_loss += F.binary_cross_entropy_with_logits(class_pred, gt.float()).mean()
 
             if self.training:
                 previous_boxes = annotations[:, i, :4]
@@ -421,7 +436,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             all_reg_loss += reg_loss
             all_bbox_loss += bbox_loss
 
-            return all_class_loss, all_reg_loss, verb_loss, all_bbox_loss
+            return all_class_loss, all_reg_loss, verb_loss, all_bbox_loss, all_rnn_class_loss/6.0
         else:
             if use_gt_verb:
                 return verb, noun_predicts, bbox_predicts, bbox_exist_list
