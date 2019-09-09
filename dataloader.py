@@ -343,6 +343,8 @@ class Augmenter(object):
 
     def __init__(self, augment_with_crops):
         self.augment_with_crops = augment_with_crops
+        if augment_with_crops:
+            print("augmentation working")
 
     def __call__(self, sample, flip_x=0.5):
 

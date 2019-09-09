@@ -41,14 +41,21 @@ def main(args=None):
 	parser.add_argument("--resume_epoch", type=int, default=0)
 	parser.add_argument("--detach_epoch", type=int, default=15)
 	parser.add_argument("--gt_noun_epoch", type=int, default=9)
-	parser.add_argument("--lr_decrease_epoch", type=int, default=25)
+	parser.add_argument("--lr_decrease_epoch", type=int, default=100)
 	parser.add_argument("--reinit-classifier", action="store_true", default=False)
 	parser.add_argument("--rnn-weights", action="store_true", default=False)
 	parser.add_argument("--augment", action="store_true", default=False)
 	parser.add_argument("--init-with-verb-warmup", action="store_true", default=False)
 	parser.add_argument("--cat-features", action="store_true", default=False)
 	parser.add_argument("--rnn-class", action="store_true", default=False)
+	parser.add_argument("--load-coco-weights", action="store_true", default=False)
 	parser.add_argument("--just-verb-loss", action="store_true", default=False)
+	parser.add_argument("--no-verb-loss", action="store_true", default=False)
+	parser.add_argument("--just-class-loss", action="store_true", default=False)
+	parser.add_argument("--retina-loss", action="store_true", default=False)
+	parser.add_argument("--only-resnet", action="store_true", default=False)
+	parser.add_argument("--warmup", action="store_true", default=False)
+	parser.add_argument("--second-lr-decrease", type=int, default=100)
 	parser.add_argument("--lr", type=float, default=.00001)
 	parser.add_argument("--all-box-regression", action="store_true", default=False)
 	parser.add_argument("--batch-size", type=int, default=16)
@@ -74,7 +81,13 @@ def main(args=None):
 	retinanet.cat_features = parser.cat_features
 	retinanet.additional_class_branch = parser.rnn_class
 	retinanet = torch.nn.DataParallel(retinanet).cuda()
-	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
+
+	#optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
+	#
+	# if parser.only_resnet:
+	# 	optimizer = optim.Adam(retinanet.module.feature_extractor.parameters(), lr=parser.lr)
+
+	optimizer = optim.SGD(retinanet.parameters(), lr=parser.lr, weight_decay=0.0001, momentum=0.9)
 
 	if parser.all_box_regression:
 		retinanet.all_box_regression = True
@@ -84,14 +97,17 @@ def main(args=None):
 	if parser.rnn_weights:
 		load_rnn_weights(retinanet)
 
+	if parser.load_coco_weights:
+		load_coco_weights(retinanet)
+
 	if parser.init_with_verb_warmup:
 		x = torch.load('./verb_warm_up.pth')
 		retinanet.module.load_state_dict(x)
 
-	#x = torch.load('./runs/lr_decrease_epoch=12_lr=.0001_detach_epoch=15_batch-size=128_2019-08-19_17:26:53/checkpoints/retinanet_10.pth')
-	# x = torch.load('./retinanet_20.pth')
-	# retinanet.module.load_state_dict(x)
+	# load_old_weights(retinanet, './retinanet_28.pth')
 
+	#orig_resnet_weight = retinanet.module.layer4[2].conv3.weight
+	#retinanet.module.feature_extractor.layer4.register_backward_hook(module_hook)
 
 	for epoch_num in range(parser.resume_epoch, parser.epochs):
 
@@ -109,6 +125,14 @@ def main(args=None):
 	retinanet.eval()
 	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
 
+
+def module_hook(module, grad_input, grad_out):
+	print("in")
+	print(grad_input[0].abs().mean())
+	print("out")
+	print(grad_out[0].abs().mean())
+
+
 def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, role_tensor):
 	retinanet.train()
 	retinanet.module.freeze_bn()
@@ -124,7 +148,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 	deatch_resnet = parser.detach_epoch > epoch_num
 	use_gt_nouns = parser.gt_noun_epoch > epoch_num
 
-	if epoch_num == parser.lr_decrease_epoch:
+	if epoch_num == parser.lr_decrease_epoch or epoch_num == parser.second_lr_decrease:
 		lr = parser.lr / 10
 
 		for param_group in optimizer.param_groups:
@@ -132,6 +156,12 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 
 	for iter_num, data in enumerate(dataloader_train):
 		i += 1
+
+		if parser.warmup and epoch_num == 0 and i <= 500:
+			learning_rate = parser.lr/3.0 + (2.0*parser.lr/3.0)*(i/500.0)
+			for param_group in optimizer.param_groups:
+				param_group["lr"] = learning_rate
+
 
 		optimizer.zero_grad()
 		image = data['img'].cuda().float()
@@ -150,6 +180,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		avg_verb_loss += verb_loss.mean().item()
 
 		if i % 100 == 0:
+
 			print(
 				'Epoch: {} | Iteration: {} | Class loss: {:1.5f} | Reg loss: {:1.5f} | Verb loss: {:1.5f} | Box loss: {:1.5f}'.format(
 					epoch_num, iter_num, float(avg_class_loss / 100), float(avg_reg_loss / 100),
@@ -170,6 +201,12 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 
 		if parser.just_verb_loss:
 			loss = verb_loss.mean()
+		elif parser.no_verb_loss:
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean()
+		elif parser.just_class_loss:
+			loss = class_loss.mean()
+		elif parser.retina_loss:
+			loss = class_loss.mean() + reg_loss.mean()
 		else:
 			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
 
@@ -281,6 +318,20 @@ def init_log_dir(parser):
 	return writer, log_dir
 
 
+def load_old_weights(retinanet, weights):
+	x = torch.load(weights)
+	just_resnet_weights = {}
+	keys = retinanet.module.state_dict().keys()
+	for weight in x:
+		if weight not in keys:
+			just_resnet_weights['feature_extractor.' + weight] = x[weight]
+		else:
+			just_resnet_weights[weight] = x[weight]
+	model_dict = retinanet.module.state_dict()
+	model_dict.update(just_resnet_weights)
+	retinanet.module.load_state_dict(model_dict)
+
+
 def load_rnn_weights(retinanet):
 	x = torch.load('./best_39.pth.tar')
 	just_resnet_weights = {}
@@ -291,6 +342,20 @@ def load_rnn_weights(retinanet):
 	model_dict = retinanet.module.state_dict()
 	model_dict.update(just_resnet_weights)
 	retinanet.module.load_state_dict(model_dict)
+
+
+def load_coco_weights(retinanet):
+	x = torch.load('./coco_resnet_50_map_0_335_state_dict.pt')
+	coco_weights = {}
+	model_dict = retinanet.module.state_dict()
+	for weight in x:
+		if weight in model_dict:
+			coco_weights[weight] = x[weight]
+		#coco_weights['classificationModel.output_retina.weight'] = x['classificationModel.output.weight']
+		#coco_weights['classificationModel.output_retina.bias'] = x['classificationModel.output.bias']
+	model_dict.update(coco_weights)
+	retinanet.module.load_state_dict(model_dict)
+
 
 def get_roles_dictionary(verb_orders, verb_to_idx):
 	role_dict = {}

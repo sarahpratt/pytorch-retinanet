@@ -116,7 +116,7 @@ class ClassificationModel(nn.Module):
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act2 = nn.ReLU()
-        self.conv3 = nn.Conv2d(feature_size*3, feature_size, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act3 = nn.ReLU()
         self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act4 = nn.ReLU()
@@ -126,16 +126,16 @@ class ClassificationModel(nn.Module):
         self.output_retina = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
         self.output_act_retina = nn.Sigmoid()
 
-    def forward(self, x, rnn_output):
+    def forward(self, x):
         out = self.conv1(x)
         out = self.act1(out)
         out = self.conv2(out)
         out = self.act2(out)
 
-        batch_size = x.shape[0]
-
-        just_rnn = rnn_output.view(batch_size, 256, 1, 1).expand(out.shape)
-        out = torch.cat([just_rnn, just_rnn*out, out], dim=1)
+        # batch_size = x.shape[0]
+        #
+        # just_rnn = rnn_output.view(batch_size, 256, 1, 1).expand(out.shape)
+        # out = torch.cat([just_rnn, just_rnn*out, out], dim=1)
 
         out = self.conv3(out)
 
@@ -155,17 +155,82 @@ class ClassificationModel(nn.Module):
         return out2.contiguous().view(x.shape[0], -1, self.num_classes), bbox_exists
 
 
+class Resnet(nn.Module):
+
+    def __init__(self, block, layers):
+        super(Resnet, self).__init__()
+        self.inplanes = 64
+        self._init_resnet(block, layers)
+
+    def _init_resnet(self, block, layers):
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+
+        if block == BasicBlock:
+            self.fpn_sizes = [self.layer2[layers[1] - 1].conv2.out_channels,
+                              self.layer3[layers[2] - 1].conv2.out_channels,
+                              self.layer4[layers[3] - 1].conv2.out_channels]
+        elif block == Bottleneck:
+            self.fpn_sizes = [self.layer2[layers[1] - 1].conv3.out_channels,
+                              self.layer3[layers[2] - 1].conv3.out_channels,
+                              self.layer4[layers[3] - 1].conv3.out_channels]
+
+
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes * block.expansion,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
+
+
+    def forward(self, img_batch, detach_resnet):
+        x = self.conv1(img_batch)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x1 = self.layer1(x)
+
+        if detach_resnet:
+            x2 = self.layer2(x1).detach()
+            x3 = self.layer3(x2).detach()
+            x4 = self.layer4(x3).detach()
+        else:
+            x2 = self.layer2(x1)
+            x3 = self.layer3(x2)
+            x4 = self.layer4(x3)
+
+        return x2, x3, x4
+
+
+
 class ResNet_RetinaNet_RNN(nn.Module):
 
     def __init__(self, num_classes, block, layers, cat_features=False):
-        self.inplanes = 64
         super(ResNet_RetinaNet_RNN, self).__init__()
 
-        self._init_resnet(block, layers)
-        self.fpn = PyramidFeatures(self.fpn_sizes[0], self.fpn_sizes[1], self.fpn_sizes[2])
+        self.feature_extractor = Resnet(block, layers)
+        self.fpn = PyramidFeatures(self.feature_extractor.fpn_sizes[0], self.feature_extractor.fpn_sizes[1], self.feature_extractor.fpn_sizes[2])
 
-        self.regressionModel = RegressionModel(256)
-        self.classificationModel = ClassificationModel(256, num_classes=num_classes)
+        self.regressionModel = RegressionModel(768)
+        self.classificationModel = ClassificationModel(768, num_classes=num_classes)
             # self.regressionModel = RegressionModel(256)
             # self.classificationModel = ClassificationModel(256, num_classes=num_classes)
         #self.classificationModel = ClassificationModel(256, num_classes=num_classes)
@@ -191,11 +256,11 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.bbox_y_embed = nn.Embedding(11, 16)
 
         # init rnn and rnn weights
-        self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024)
+        self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
         for name, param in self.rnn.named_parameters():
             if 'weight' in name:
                 nn.init.orthogonal_(param)
-        self.rnn_linear = nn.Linear(1024, 256)
+        self.rnn_linear = nn.Linear(1024*2, 256)
 
         # fill class/reg branches with weights
         prior = 0.01
@@ -211,26 +276,6 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.all_box_regression = False
 
 
-    def _init_resnet(self, block, layers):
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
-
-        if block == BasicBlock:
-            self.fpn_sizes = [self.layer2[layers[1] - 1].conv2.out_channels,
-                              self.layer3[layers[2] - 1].conv2.out_channels,
-                              self.layer4[layers[3] - 1].conv2.out_channels]
-        elif block == Bottleneck:
-            self.fpn_sizes = [self.layer2[layers[1] - 1].conv3.out_channels,
-                              self.layer3[layers[2] - 1].conv3.out_channels,
-                              self.layer4[layers[3] - 1].conv3.out_channels]
-
-
     def _convs_and_bn_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -241,28 +286,12 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 m.bias.data.zero_()
 
 
-    def _make_layer(self, block, planes, blocks, stride=1):
-        downsample = None
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion,
-                          kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(planes * block.expansion),
-            )
-
-        layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample))
-        self.inplanes = planes * block.expansion
-        for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes))
-
-        return nn.Sequential(*layers)
-
     def freeze_bn(self):
         '''Freeze BatchNorm layers.'''
         for layer in self.modules():
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
+
 
     def forward(self, inputs, roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
 
@@ -274,21 +303,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
         batch_size = img_batch.shape[0]
 
         # Extract Visual Features
-        x = self.conv1(img_batch)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-
-        x1 = self.layer1(x)
-
-        if detach_resnet:
-            x2 = self.layer2(x1).detach()
-            x3 = self.layer3(x2).detach()
-            x4 = self.layer4(x3).detach()
-        else:
-            x2 = self.layer2(x1)
-            x3 = self.layer3(x2)
-            x4 = self.layer4(x3)
+        x2, x3, x4 = self.feature_extractor(img_batch, detach_resnet)
 
         image_predict = self.avgpool(x4)
         image_predict = image_predict.squeeze()
@@ -309,9 +324,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
         features.pop(0)  # SARAH - remove feature batch
 
         # init LSTM inputs
-        hx, cx = torch.zeros(batch_size, 1024).cuda(x.device), torch.zeros(batch_size, 1024).cuda(x.device)
-        previous_box_embed = torch.zeros(batch_size, 64).cuda(x.device)
-
+        hx, cx = torch.zeros(batch_size, 1024*2).cuda(), torch.zeros(batch_size, 1024*2).cuda()
+        previous_box_embed = torch.zeros(batch_size, 64).cuda()
 
         # init losses
         all_class_loss = 0
@@ -334,22 +348,22 @@ class ResNet_RetinaNet_RNN(nn.Module):
             rnn_output = self.rnn_linear(hx)
 
 
-            # just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
-            # rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
-            # rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
+            just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
+            rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
+            rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
             #rnn_feature_shapes = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
 
 
-            #regression = torch.cat([self.regressionModel(rnn_and_features) for rnn_and_features in rnn_feature_shapes], dim=1)
+            regression = torch.cat([self.regressionModel(rnn_and_features) for rnn_and_features in rnn_feature_shapes], dim=1)
 
 
-            regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
+            #regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
 
 
             classifications = []
             bbox_exist = []
-            for ii in range(len(features)):
-                classication = self.classificationModel(features[ii], rnn_output)
+            for ii in range(len(rnn_feature_shapes)):
+                classication = self.classificationModel(rnn_feature_shapes[ii])
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
 

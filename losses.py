@@ -117,6 +117,12 @@ class FocalLoss(nn.Module):
             cls_loss = focal_weight * bce
             cls_loss = torch.where(torch.ne(targets, -1.0), cls_loss, torch.zeros(cls_loss.shape).cuda())
 
+
+            #curr_loss = cls_loss.sum(dim=1).sum(dim=1)/torch.clamp(num_positive_anchors.float(), min=1.0)
+            # xx = bbox_exists_tensor[j]
+            # if (sum(xx.float())) > 0:
+            #     curr_loss = (curr_loss * xx.float())/sum(xx.float())
+
             classification_losses.append(cls_loss.sum(dim=1).sum(dim=1)/torch.clamp(num_positive_anchors.float(), min=1.0))
             positive_indices = positive_indices.byte()
 
