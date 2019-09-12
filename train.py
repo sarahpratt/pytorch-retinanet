@@ -15,6 +15,8 @@ from tensorboardX import SummaryWriter
 
 import warnings
 
+from cosine_lr import CosineAnnealingWarmUpRestarts as CosScheduler
+
 import math
 import model
 from dataloader import CSVDataset, collater, Resizer, AspectRatioBasedSampler, Augmenter, UnNormalizer, Normalizer
@@ -55,6 +57,7 @@ def main(args=None):
 	parser.add_argument("--retina-loss", action="store_true", default=False)
 	parser.add_argument("--only-resnet", action="store_true", default=False)
 	parser.add_argument("--warmup", action="store_true", default=False)
+	parser.add_argument("--warmup2", action="store_true", default=False)
 	parser.add_argument("--second-lr-decrease", type=int, default=100)
 	parser.add_argument("--lr", type=float, default=.00001)
 	parser.add_argument("--all-box-regression", action="store_true", default=False)
@@ -78,7 +81,6 @@ def main(args=None):
 
 	print("loading model")
 	retinanet = create_model(parser, dataset_train)
-	retinanet.cat_features = parser.cat_features
 	retinanet.additional_class_branch = parser.rnn_class
 	retinanet = torch.nn.DataParallel(retinanet).cuda()
 
@@ -87,7 +89,10 @@ def main(args=None):
 	# if parser.only_resnet:
 	# 	optimizer = optim.Adam(retinanet.module.feature_extractor.parameters(), lr=parser.lr)
 
-	optimizer = optim.SGD(retinanet.parameters(), lr=parser.lr, weight_decay=0.0001, momentum=0.9)
+	#optimizer = optim.SGD(retinanet.parameters(), lr=parser.lr, weight_decay=0.0001, momentum=0.9)
+	optimizer = optim.SGD(retinanet.parameters(), lr=parser.lr, weight_decay=0.0000305, momentum=0.875)
+
+	#scheduler = CosScheduler(optimizer, T_0=30000, T_mult=1, eta_max=0.01, T_up=500, gamma=0.5)
 
 	if parser.all_box_regression:
 		retinanet.all_box_regression = True
@@ -104,7 +109,14 @@ def main(args=None):
 		x = torch.load('./verb_warm_up.pth')
 		retinanet.module.load_state_dict(x)
 
-	# load_old_weights(retinanet, './retinanet_28.pth')
+	#load_old_weights(retinanet, './retinanet_50.pth')
+	# x = torch.load('./retinanet_80.pth')
+	# retinanet.module.load_state_dict(x['state_dict'])
+	# optimizer.load_state_dict(x['optimizer'])
+	# for param_group in optimizer.param_groups:
+	# 	param_group["lr"] = 0.003
+
+	print('weights loaded')
 
 	#orig_resnet_weight = retinanet.module.layer4[2].conv3.weight
 	#retinanet.module.feature_extractor.layer4.register_backward_hook(module_hook)
@@ -114,7 +126,7 @@ def main(args=None):
 		train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, role_tensor)
 
 		if epoch_num % 2 == 0:
-			torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
+			torch.save({'state_dict': retinanet.module.state_dict(), 'optimizer': optimizer.state_dict()}, log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
 
 		if epoch_num%1 == 0:
 			print('Evaluating dataset')
@@ -143,6 +155,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 	avg_reg_loss = 0.0
 	avg_bbox_loss = 0.0
 	avg_verb_loss = 0.0
+	avg_rnn_class_loss = 0.0
 	retinanet.training = True
 
 	deatch_resnet = parser.detach_epoch > epoch_num
@@ -163,6 +176,12 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 				param_group["lr"] = learning_rate
 
 
+		if parser.warmup2 and epoch_num < 5:
+			learning_rate = (parser.lr*(epoch_num * len(dataloader_train) + i))/(5 * len(dataloader_train))
+			for param_group in optimizer.param_groups:
+				param_group["lr"] = learning_rate
+
+
 		optimizer.zero_grad()
 		image = data['img'].cuda().float()
 		annotations = data['annot'].cuda().float()
@@ -171,13 +190,14 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		heights = data['heights'].cuda()
 		roles = role_tensor[verbs].cuda()
 
-		class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs, widths, heights], roles,
+		class_loss, reg_loss, verb_loss, bbox_loss, all_rnn_class_loss = retinanet([image, annotations, verbs, widths, heights], roles,
 															   deatch_resnet, use_gt_nouns)
 
 		avg_class_loss += class_loss.mean().item()
 		avg_reg_loss += reg_loss.mean().item()
 		avg_bbox_loss += bbox_loss.mean().item()
 		avg_verb_loss += verb_loss.mean().item()
+		avg_rnn_class_loss += all_rnn_class_loss.mean().item()
 
 		if i % 100 == 0:
 
@@ -193,28 +213,32 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 							  epoch_num * (len(dataloader_train)) + i)
 			writer.add_scalar("train/verb_loss", avg_verb_loss / 100,
 							  epoch_num * (len(dataloader_train)) + i)
+			writer.add_scalar("train/rnn_class_loss", avg_rnn_class_loss / 100,
+							  epoch_num * (len(dataloader_train)) + i)
 
 			avg_class_loss = 0.0
 			avg_reg_loss = 0.0
 			avg_bbox_loss = 0.0
 			avg_verb_loss = 0.0
+			avg_rnn_class_loss = 0.0
 
 		if parser.just_verb_loss:
 			loss = verb_loss.mean()
 		elif parser.no_verb_loss:
-			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean()
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + all_rnn_class_loss.mean()
 		elif parser.just_class_loss:
 			loss = class_loss.mean()
 		elif parser.retina_loss:
 			loss = class_loss.mean() + reg_loss.mean()
 		else:
-			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean() + all_rnn_class_loss.mean()
 
 		if bool(loss == 0):
 			continue
 		loss.backward()
 		torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 1, norm_type="inf")
 		optimizer.step()
+		#scheduler.step()
 
 
 def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb_orders, dev_gt, epoch_num, writer, role_tensor):
