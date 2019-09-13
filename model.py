@@ -258,14 +258,33 @@ class ResNet_RetinaNet_RNN(nn.Module):
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
 
-    def get_local_visual_features(self, featues, cntr_x, cntr_y, bbox_exists, batch_size):
-        x_bin = torch.floor(featues.shape[2] * cntr_x).long()
-        x_bin[x_bin < 0] = 0
-        y_bin = torch.floor(featues.shape[3] * cntr_y).long()
-        y_bin[y_bin < 0] = 0
-        local_features = featues[torch.arange(batch_size), :, x_bin, y_bin]
-        local_features[torch.arange(batch_size)[bbox_exists], :] = 0
+    def get_local_visual_features(self, featues, bbox, bbox_exists, batch_size):
+        x_start_bin = self.get_bin(featues.shape[2], bbox[0])
+        end_x_bin = self.get_bin(featues.shape[2], bbox[1])
+        start_y_bin = self.get_bin(featues.shape[3], bbox[2])
+        end_y_bin = self.get_bin(featues.shape[3], bbox[3])
+
+        local_features = torch.zeros(batch_size, 256).cuda()
+
+        for i in range(batch_size):
+            if bbox_exists[i]:
+                feature_slice = featues[i, :, x_start_bin[i]:end_x_bin[i]+1, start_y_bin[i]:end_y_bin[i]+1]
+                local_features[i] = self.avgpool(feature_slice).squeeze()
         return local_features
+
+    def get_bin(self, image_size, location_percentage):
+        bin = torch.floor(image_size * location_percentage).long()
+        bin[bin < 0] = 0
+        return bin.long()
+
+    # def get_local_visual_features(self, featues, cntr_x, cntr_y, bbox_exists, batch_size):
+    #     x_bin = torch.floor(featues.shape[2] * cntr_x).long()
+    #     x_bin[x_bin < 0] = 0
+    #     y_bin = torch.floor(featues.shape[3] * cntr_y).long()
+    #     y_bin[y_bin < 0] = 0
+    #     local_features = featues[torch.arange(batch_size), :, x_bin, y_bin]
+    #     local_features[torch.arange(batch_size)[bbox_exists], :] = 0
+    #     return local_features
 
     def forward(self, inputs, roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
 
@@ -390,7 +409,14 @@ class ResNet_RetinaNet_RNN(nn.Module):
             prev_ctr_y = previous_boxes[:, 0] / img_batch.shape[3] + 0.5 * prev_heights
             prev_ctr_x = previous_boxes[:, 1] / img_batch.shape[2] + 0.5 * prev_widths
 
-            previous_location_features = self.get_local_visual_features(features[2], prev_ctr_x, prev_ctr_y, previous_boxes[:, 0] == -1, batch_size)
+            perc_start_x = previous_boxes[:, 1]/img_batch.shape[2]
+            perc_end_x = previous_boxes[:, 3]/img_batch.shape[2]
+            perc_start_y = previous_boxes[:, 0]/img_batch.shape[3]
+            perc_end_y = previous_boxes[:, 2]/img_batch.shape[3]
+
+            bbox = [perc_start_x, perc_end_x, perc_start_y, perc_end_y]
+
+            previous_location_features = self.get_local_visual_features(features[0], bbox, previous_boxes[:, 0] == -1, batch_size)
 
             prev_widths = torch.ceil(prev_widths * 10).long()
             prev_heights = torch.ceil(prev_heights * 10).long()

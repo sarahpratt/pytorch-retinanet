@@ -110,9 +110,9 @@ def main(args=None):
 		retinanet.module.load_state_dict(x)
 
 	#load_old_weights(retinanet, './retinanet_50.pth')
-	x = torch.load('./retinanet_18.pth')
-	retinanet.module.load_state_dict(x['state_dict'])
-	optimizer.load_state_dict(x['optimizer'])
+	# x = torch.load('./retinanet_18.pth')
+	# retinanet.module.load_state_dict(x['state_dict'])
+	# optimizer.load_state_dict(x['optimizer'])
 	# for param_group in optimizer.param_groups:
 	# 	param_group["lr"] = 0.003
 
