@@ -84,13 +84,13 @@ def main(args=None):
 	retinanet.additional_class_branch = parser.rnn_class
 	retinanet = torch.nn.DataParallel(retinanet).cuda()
 
-	#optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
+	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
 	#
 	# if parser.only_resnet:
 	# 	optimizer = optim.Adam(retinanet.module.feature_extractor.parameters(), lr=parser.lr)
 
 	#optimizer = optim.SGD(retinanet.parameters(), lr=parser.lr, weight_decay=0.0001, momentum=0.9)
-	optimizer = optim.SGD(retinanet.parameters(), lr=parser.lr, weight_decay=0.0000305, momentum=0.875)
+	#optimizer = optim.SGD(retinanet.parameters(), lr=parser.lr, weight_decay=0.0000305, momentum=0.875)
 
 	#scheduler = CosScheduler(optimizer, T_0=30000, T_mult=1, eta_max=0.01, T_up=500, gamma=0.5)
 
@@ -110,9 +110,9 @@ def main(args=None):
 		retinanet.module.load_state_dict(x)
 
 	#load_old_weights(retinanet, './retinanet_50.pth')
-	# x = torch.load('./retinanet_80.pth')
-	# retinanet.module.load_state_dict(x['state_dict'])
-	# optimizer.load_state_dict(x['optimizer'])
+	x = torch.load('./retinanet_18.pth')
+	retinanet.module.load_state_dict(x['state_dict'])
+	optimizer.load_state_dict(x['optimizer'])
 	# for param_group in optimizer.param_groups:
 	# 	param_group["lr"] = 0.003
 
@@ -155,7 +155,6 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 	avg_reg_loss = 0.0
 	avg_bbox_loss = 0.0
 	avg_verb_loss = 0.0
-	avg_rnn_class_loss = 0.0
 	retinanet.training = True
 
 	deatch_resnet = parser.detach_epoch > epoch_num
@@ -190,14 +189,13 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		heights = data['heights'].cuda()
 		roles = role_tensor[verbs].cuda()
 
-		class_loss, reg_loss, verb_loss, bbox_loss, all_rnn_class_loss = retinanet([image, annotations, verbs, widths, heights], roles,
+		class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs, widths, heights], roles,
 															   deatch_resnet, use_gt_nouns)
 
 		avg_class_loss += class_loss.mean().item()
 		avg_reg_loss += reg_loss.mean().item()
 		avg_bbox_loss += bbox_loss.mean().item()
 		avg_verb_loss += verb_loss.mean().item()
-		avg_rnn_class_loss += all_rnn_class_loss.mean().item()
 
 		if i % 100 == 0:
 
@@ -213,8 +211,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 							  epoch_num * (len(dataloader_train)) + i)
 			writer.add_scalar("train/verb_loss", avg_verb_loss / 100,
 							  epoch_num * (len(dataloader_train)) + i)
-			writer.add_scalar("train/rnn_class_loss", avg_rnn_class_loss / 100,
-							  epoch_num * (len(dataloader_train)) + i)
+
 
 			avg_class_loss = 0.0
 			avg_reg_loss = 0.0
@@ -225,13 +222,13 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		if parser.just_verb_loss:
 			loss = verb_loss.mean()
 		elif parser.no_verb_loss:
-			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + all_rnn_class_loss.mean()
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean()
 		elif parser.just_class_loss:
 			loss = class_loss.mean()
 		elif parser.retina_loss:
 			loss = class_loss.mean() + reg_loss.mean()
 		else:
-			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean() + all_rnn_class_loss.mean()
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
 
 		if bool(loss == 0):
 			continue
