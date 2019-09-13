@@ -84,13 +84,13 @@ def main(args=None):
 	retinanet.additional_class_branch = parser.rnn_class
 	retinanet = torch.nn.DataParallel(retinanet).cuda()
 
-	#optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
+	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
 	#
 	# if parser.only_resnet:
 	# 	optimizer = optim.Adam(retinanet.module.feature_extractor.parameters(), lr=parser.lr)
 
 	#optimizer = optim.SGD(retinanet.parameters(), lr=parser.lr, weight_decay=0.0001, momentum=0.9)
-	optimizer = optim.SGD(retinanet.parameters(), lr=parser.lr, weight_decay=0.0000305, momentum=0.875)
+	#optimizer = optim.SGD(retinanet.parameters(), lr=parser.lr, weight_decay=0.0000305, momentum=0.875)
 
 	#scheduler = CosScheduler(optimizer, T_0=30000, T_mult=1, eta_max=0.01, T_up=500, gamma=0.5)
 

@@ -376,6 +376,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             #print(classification)
             #pdb.set_trace()
             classification_guess = torch.argmax(noun_distribution[:, :-2], dim=1)
+            #pdb.set_trace()
             best_bbox = torch.argmax(classification[torch.arange(batch_size), :, classification_guess.long()], dim=1)
             # best_per_box = torch.max(classification[:, :, :-2], dim=2)[0]
             # best_bbox = torch.argmax(best_per_box, dim=1)
