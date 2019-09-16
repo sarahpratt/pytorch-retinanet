@@ -194,7 +194,11 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.bbox_y_embed = nn.Embedding(11, 16)
 
         # init rnn and rnn weights
-        self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
+        self.rnn = nn.LSTMCell(2048 + 512 + 64 + 2048, 1024*2)
+        #self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
+        #self.rnn = nn.LSTMCell(2048 + 512, 1024*2)
+
+
         for name, param in self.rnn.named_parameters():
             if 'weight' in name:
                 nn.init.orthogonal_(param)
@@ -269,6 +273,25 @@ class ResNet_RetinaNet_RNN(nn.Module):
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
 
+    def get_local_visual_features(self, featues, bbox, bbox_exists, batch_size):
+        x_start_bin = self.get_bin(featues.shape[2], bbox[0])
+        end_x_bin = self.get_bin(featues.shape[2], bbox[1])
+        start_y_bin = self.get_bin(featues.shape[3], bbox[2])
+        end_y_bin = self.get_bin(featues.shape[3], bbox[3])
+
+        local_features = torch.zeros(batch_size, 2048).cuda()
+
+        for i in range(batch_size):
+            if bbox_exists[i]:
+                feature_slice = featues[i, :, x_start_bin[i]:end_x_bin[i]+1, start_y_bin[i]:end_y_bin[i]+1]
+                local_features[i] = self.avgpool(feature_slice).squeeze()
+        return local_features
+
+    def get_bin(self, image_size, location_percentage):
+        bin = torch.floor(image_size * location_percentage).long()
+        bin[bin < 0] = 0
+        return bin.long()
+
     def forward(self, inputs, roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
 
         if self.training:
@@ -334,14 +357,21 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
         noun_loss = 0.0
 
+        previous_location_features = torch.zeros(batch_size, 2048).cuda(x.device)
+
+
 
         for i in range(6):
-            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
+            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed, previous_location_features), dim=1)
+            #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
+            #rnn_input = torch.cat((image_predict, previous_word), dim=1)
+
+
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
             noun_distribution = self.noun_fc(hx)
 
-            if self.training and use_gt_nouns:
+            if self.training:
                 gt = torch.zeros(batch_size, self.num_classes).cuda(x.device)
                 gt[torch.arange(batch_size), annotations[:, i, -1].long()] = 1
                 gt[torch.arange(batch_size), annotations[:, i, -2].long()] = 1
@@ -399,10 +429,19 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
                 previous_boxes = transformed_anchors[torch.arange(batch_size), best_bbox, :]
 
-            prev_heights = (previous_boxes[:, 2] - previous_boxes[:, 0]) / heights
-            prev_widths = (previous_boxes[:, 3] - previous_boxes[:, 1]) / widths
-            prev_ctr_y = previous_boxes[:, 0] / heights + 0.5 * prev_heights
-            prev_ctr_x = previous_boxes[:, 1] / widths + 0.5 * prev_widths
+            prev_heights = (previous_boxes[:, 2] - previous_boxes[:, 0]) / img_batch.shape[3]
+            prev_widths = (previous_boxes[:, 3] - previous_boxes[:, 1]) / img_batch.shape[2]
+            prev_ctr_y = previous_boxes[:, 0] / img_batch.shape[3] + 0.5 * prev_heights
+            prev_ctr_x = previous_boxes[:, 1] / img_batch.shape[2] + 0.5 * prev_widths
+
+            perc_start_x = previous_boxes[:, 1] / img_batch.shape[2]
+            perc_end_x = previous_boxes[:, 3] / img_batch.shape[2]
+            perc_start_y = previous_boxes[:, 0] / img_batch.shape[3]
+            perc_end_y = previous_boxes[:, 2] / img_batch.shape[3]
+
+            bbox = [perc_start_x, perc_end_x, perc_start_y, perc_end_y]
+
+            previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1, batch_size)
 
             prev_widths = torch.ceil(prev_widths * 10).long()
             prev_heights = torch.ceil(prev_heights * 10).long()
