@@ -153,7 +153,23 @@ class ClassificationModel(nn.Module):
         out1 = out1.permute(0, 2, 3, 1)  # out is B x C x W x H, with C = n_classes + n_anchors
         batch_size, width, height, channels = out1.shape
         out2 = out1.view(batch_size, width, height, self.num_anchors, self.num_classes)
+        #nouns = nouns.view(x.shape[0], 1, self.num_classes)
+
+        #nouns = F.softmax(nouns.view(x.shape[0], 1, self.num_classes), dim=2)
+        #return F.softmax(out2.contiguous().view(x.shape[0], -1, self.num_classes), dim=2)*nouns, bbox_exists
         return out2.contiguous().view(x.shape[0], -1, self.num_classes), bbox_exists
+
+        #return out2.contiguous().view(x.shape[0], -1, self.num_classes) * nouns, bbox_exists
+
+
+class LearnableVector(nn.Module):
+
+    def __init__(self, n):
+        super(LearnableVector, self).__init__()
+        self.weight = nn.Parameter(torch.randn(1,n))
+
+    def forward(self, x):
+        return self.weight * x
 
 
 class ResNet_RetinaNet_RNN(nn.Module):
@@ -179,6 +195,9 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.focalLoss = losses.FocalLoss()
         self.cat_features = cat_features
 
+
+        #self.noun_attn = LearnableVector(num_classes)
+
         self._convs_and_bn_weights()
 
         # verb predictor
@@ -194,8 +213,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.bbox_y_embed = nn.Embedding(11, 16)
 
         # init rnn and rnn weights
-        self.rnn = nn.LSTMCell(2048 + 512 + 64 + 2048, 1024*2)
-        #self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
+        #self.rnn = nn.LSTMCell(2048 + 512 + 64 + 2048, 1024*2)
+        self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
         #self.rnn = nn.LSTMCell(2048 + 512, 1024*2)
 
 
@@ -204,6 +223,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 nn.init.orthogonal_(param)
         self.rnn_linear = nn.Linear(1024*2, 256)
         self.noun_fc = nn.Linear(1024*2, num_classes)
+        #self.noun_dist = nn.Linear(1024*2, num_classes)
+
 
 
         # fill class/reg branches with weights
@@ -284,6 +305,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
         for i in range(batch_size):
             if bbox_exists[i]:
                 feature_slice = featues[i, :, x_start_bin[i]:end_x_bin[i]+1, start_y_bin[i]:end_y_bin[i]+1]
+                #i_bbox = [bbox[0][i], bbox[1][i], bbox[2][i], bbox[3][i]]
+                #weights = self.get_weights(featues.shape[2], featues.shape[3], x_start_bin[i], end_x_bin[i], start_y_bin[i], end_y_bin[i], i_bbox, batch_size)
                 local_features[i] = self.avgpool(feature_slice).squeeze()
         return local_features
 
@@ -291,6 +314,21 @@ class ResNet_RetinaNet_RNN(nn.Module):
         bin = torch.floor(image_size * location_percentage).long()
         bin[bin < 0] = 0
         return bin.long()
+
+
+    def get_weights(self, feature_length, feature_height, x_start_bin, end_x_bin, start_y_bin, end_y_bin, bbox, batch_size):
+        x_weights = torch.zeros(batch_size, 1, feature_length, feature_height).cuda()
+        x_weights[torch.arange(batch_size), :, x_start_bin+1:end_x_bin, :] = 1.0
+        x_weights[torch.arange(batch_size), :, x_start_bin, :] = (x_start_bin+1) - feature_length*bbox[0]
+        x_weights[torch.arange(batch_size), :, end_x_bin, :] = feature_length * bbox[1] - end_x_bin
+
+        y_weights = torch.zeros(batch_size, 1, feature_length, feature_height).cuda()
+        y_weights[torch.arange(batch_size), :, :, start_y_bin + 1:end_y_bin] = 1.0
+        y_weights[torch.arange(batch_size), :, :, start_y_bin] = (start_y_bin + 1) - feature_height * bbox[2]
+        y_weights[torch.arange(batch_size), :, :, end_y_bin] = feature_height * bbox[3] - end_y_bin
+
+        return x_weights*y_weights
+
 
     def forward(self, inputs, roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
 
@@ -362,13 +400,14 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
 
         for i in range(6):
-            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed, previous_location_features), dim=1)
-            #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
+            #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed, previous_location_features), dim=1)
+            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
             #rnn_input = torch.cat((image_predict, previous_word), dim=1)
 
 
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
+            #noun_attention = self.noun_fc(hx)
             noun_distribution = self.noun_fc(hx)
 
             if self.training:
@@ -389,6 +428,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
             classifications = []
             bbox_exist = []
+            #nouns = self.noun_attn(noun_distribution)
             for ii in range(len(rnn_feature_shapes)):
                 classication = self.classificationModel(rnn_feature_shapes[ii])
                 bbox_exist.append(classication[1])
@@ -405,11 +445,16 @@ class ResNet_RetinaNet_RNN(nn.Module):
             #pdb.set_trace()
             #print(classification)
             #pdb.set_trace()
-            classification_guess = torch.argmax(noun_distribution[:, :-2], dim=1)
+            noun_distribution_temp = noun_distribution.clone()
+            # if torch.any(bbox_exist > 0.5):
+            #     noun_distribution_temp[bbox_exist > 0.5, -3] = torch.min(noun_distribution[bbox_exist > 0.5, :], dim=1)[0]
+            classification_guess = torch.argmax(noun_distribution_temp[:, :-2], dim=1)
             #pdb.set_trace()
             best_bbox = torch.argmax(classification[torch.arange(batch_size), :, classification_guess.long()], dim=1)
+
             # best_per_box = torch.max(classification[:, :, :-2], dim=2)[0]
             # best_bbox = torch.argmax(best_per_box, dim=1)
+            # classification_guess = torch.argmax(noun_distribution[:, :-2], dim=1)
 
             #class_boxes = classification[torch.arange(batch_size), best_bbox, :]
             #classification_guess = torch.argmax(class_boxes[:, :-2], dim=1)
@@ -441,7 +486,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
             bbox = [perc_start_x, perc_end_x, perc_start_y, perc_end_y]
 
-            previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1, batch_size)
+            #previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1, batch_size)
 
             prev_widths = torch.ceil(prev_widths * 10).long()
             prev_heights = torch.ceil(prev_heights * 10).long()

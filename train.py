@@ -52,7 +52,9 @@ def main(args=None):
 	parser.add_argument("--rnn-class", action="store_true", default=False)
 	parser.add_argument("--load-coco-weights", action="store_true", default=False)
 	parser.add_argument("--just-verb-loss", action="store_true", default=False)
+	parser.add_argument("--no-rnn-loss", action="store_true", default=False)
 	parser.add_argument("--no-verb-loss", action="store_true", default=False)
+	parser.add_argument("--weighted-verb-loss", action="store_true", default=False)
 	parser.add_argument("--just-class-loss", action="store_true", default=False)
 	parser.add_argument("--retina-loss", action="store_true", default=False)
 	parser.add_argument("--only-resnet", action="store_true", default=False)
@@ -110,7 +112,7 @@ def main(args=None):
 		retinanet.module.load_state_dict(x)
 
 	#load_old_weights(retinanet, './retinanet_50.pth')
-	# x = torch.load('./retinanet_54.pth')
+	# x = torch.load('./retinanet_14.pth')
 	# retinanet.module.load_state_dict(x['state_dict'])
 	# optimizer.load_state_dict(x['optimizer'])
 	# for param_group in optimizer.param_groups:
@@ -176,8 +178,8 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 				param_group["lr"] = learning_rate
 
 
-		if parser.warmup2 and epoch_num < 5:
-			learning_rate = (parser.lr*(epoch_num * len(dataloader_train) + i))/(5 * len(dataloader_train))
+		if parser.warmup2 and epoch_num < 5 + parser.resume_epoch:
+			learning_rate = (parser.lr*((epoch_num - parser.resume_epoch) * len(dataloader_train) + i))/(5 * len(dataloader_train))
 			for param_group in optimizer.param_groups:
 				param_group["lr"] = learning_rate
 
@@ -226,11 +228,15 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		if parser.just_verb_loss:
 			loss = verb_loss.mean()
 		elif parser.no_verb_loss:
-			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + all_rnn_class_loss.mean()
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean()
 		elif parser.just_class_loss:
 			loss = class_loss.mean()
 		elif parser.retina_loss:
 			loss = class_loss.mean() + reg_loss.mean()
+		elif parser.no_rnn_loss:
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
+		elif parser.weighted_verb_loss and not deatch_resnet:
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()*0.01 + all_rnn_class_loss.mean()
 		else:
 			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean() + all_rnn_class_loss.mean()
 
