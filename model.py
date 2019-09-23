@@ -112,7 +112,11 @@ class ClassificationModel(nn.Module):
         super(ClassificationModel, self).__init__()
         self.num_classes = num_classes
         self.num_anchors = num_anchors
-        self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
+        self.spatial_conv = nn.Conv2d(2, 64, kernel_size=1)
+        self.bbox_conv = nn.Conv2d(4, 64, kernel_size=1)
+        self.mask_conv = nn.Conv2d(1, 64, kernel_size=1)
+
+        self.conv1 = nn.Conv2d(num_features_in + 64 + 64 + 64, feature_size, kernel_size=3, padding=1)
         #self.bn1 = nn.BatchNorm2d(feature_size)
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
@@ -130,8 +134,24 @@ class ClassificationModel(nn.Module):
         self.output_retina = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
         self.output_act_retina = nn.Sigmoid()
 
-    def forward(self, x):
-        out = self.conv1(x)
+    def forward(self, x, noun_dist, bbox, w):
+
+        x_directions = (torch.arange(x.shape[2]).float() / x.shape[2]).cuda()
+        x_directions = x_directions.view(1, 1, x_directions.shape[0], 1).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
+
+        y_directions = (torch.arange(x.shape[3]).float() / x.shape[3]).cuda()
+        y_directions = y_directions.view(1, 1, 1, y_directions.shape[0]).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
+        spatial = torch.cat((x_directions, y_directions), dim=1)
+        spatial = self.spatial_conv(spatial)
+
+        bbox = bbox.view(x.shape[0], 4, 1, 1).expand([x.shape[0], 4, x.shape[2], x.shape[3]])
+
+        bbox = self.bbox_conv(bbox)
+        mask = self.mask_conv(w)
+
+        new_x = torch.cat((x, spatial, bbox, mask), dim=1)
+
+        out = self.conv1(new_x)
         #out = self.bn1(out)
         out = self.act1(out)
         out = self.conv2(out)
@@ -157,9 +177,8 @@ class ClassificationModel(nn.Module):
 
         #nouns = F.softmax(nouns.view(x.shape[0], 1, self.num_classes), dim=2)
         #return F.softmax(out2.contiguous().view(x.shape[0], -1, self.num_classes), dim=2)*nouns, bbox_exists
-        return out2.contiguous().view(x.shape[0], -1, self.num_classes), bbox_exists
-
-        #return out2.contiguous().view(x.shape[0], -1, self.num_classes) * nouns, bbox_exists
+        #return out2.contiguous().view(x.shape[0], -1, self.num_classes), bbox_exists
+        return out2.contiguous().view(new_x.shape[0], -1, self.num_classes), bbox_exists
 
 
 class LearnableVector(nn.Module):
@@ -213,8 +232,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.bbox_y_embed = nn.Embedding(11, 16)
 
         # init rnn and rnn weights
-        #self.rnn = nn.LSTMCell(2048 + 512 + 64 + 2048, 1024*2)
-        self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
+        self.rnn = nn.LSTMCell(2048 + 512 + 64 + 2048, 1024*2)
+        #self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
         #self.rnn = nn.LSTMCell(2048 + 512, 1024*2)
 
 
@@ -294,38 +313,52 @@ class ResNet_RetinaNet_RNN(nn.Module):
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
 
-    def get_local_visual_features(self, featues, bbox, bbox_exists, batch_size):
-        x_start_bin = self.get_bin(featues.shape[2], bbox[0])
-        end_x_bin = self.get_bin(featues.shape[2], bbox[1])
-        start_y_bin = self.get_bin(featues.shape[3], bbox[2])
-        end_y_bin = self.get_bin(featues.shape[3], bbox[3])
-
+    def get_local_visual_features(self, featues, bbox, no_grounding, batch_size):
+        x_start_bin = self.get_bin(featues.shape[2], bbox[:, 0])
+        end_x_bin = self.get_bin(featues.shape[2], bbox[:, 1])
+        start_y_bin = self.get_bin(featues.shape[3], bbox[:, 2])
+        end_y_bin = self.get_bin(featues.shape[3], bbox[:, 3])
         local_features = torch.zeros(batch_size, 2048).cuda()
-
         for i in range(batch_size):
-            if bbox_exists[i]:
-                feature_slice = featues[i, :, x_start_bin[i]:end_x_bin[i]+1, start_y_bin[i]:end_y_bin[i]+1]
-                #i_bbox = [bbox[0][i], bbox[1][i], bbox[2][i], bbox[3][i]]
-                #weights = self.get_weights(featues.shape[2], featues.shape[3], x_start_bin[i], end_x_bin[i], start_y_bin[i], end_y_bin[i], i_bbox, batch_size)
-                local_features[i] = self.avgpool(feature_slice).squeeze()
+            if not no_grounding[i]:
+                #feature_slice = featues[i, :, x_start_bin[i]:end_x_bin[i]+1, start_y_bin[i]:end_y_bin[i]+1]
+                i_bbox = [bbox[i][0], bbox[i][1], bbox[i][2], bbox[i][3]]
+                weights = self.get_weights(featues.shape[2], featues.shape[3], x_start_bin[i], end_x_bin[i], start_y_bin[i], end_y_bin[i], i_bbox, batch_size)
+                local_features[i] = self.avgpool(featues[i, :]*weights).squeeze()
         return local_features
 
+
+    def get_all_weights(self, featues, bbox, no_grounding, batch_size):
+        x_start_bin = self.get_bin(featues.shape[2], bbox[:, 0])
+        end_x_bin = self.get_bin(featues.shape[2], bbox[:, 1])
+        start_y_bin = self.get_bin(featues.shape[3], bbox[:, 2])
+        end_y_bin = self.get_bin(featues.shape[3], bbox[:, 3])
+        all_weights = torch.zeros(batch_size, 1, featues.shape[2], featues.shape[3]).cuda()
+        for i in range(batch_size):
+            if not no_grounding[i]:
+                i_bbox = [bbox[i][0], bbox[i][1], bbox[i][2], bbox[i][3]]
+                weights = self.get_weights(featues.shape[2], featues.shape[3], x_start_bin[i], end_x_bin[i], start_y_bin[i], end_y_bin[i], i_bbox, batch_size)
+                all_weights[i] = weights
+        return all_weights
+
+
     def get_bin(self, image_size, location_percentage):
+        location_percentage[location_percentage >= 1.0] = .99
         bin = torch.floor(image_size * location_percentage).long()
         bin[bin < 0] = 0
         return bin.long()
 
 
     def get_weights(self, feature_length, feature_height, x_start_bin, end_x_bin, start_y_bin, end_y_bin, bbox, batch_size):
-        x_weights = torch.zeros(batch_size, 1, feature_length, feature_height).cuda()
-        x_weights[torch.arange(batch_size), :, x_start_bin+1:end_x_bin, :] = 1.0
-        x_weights[torch.arange(batch_size), :, x_start_bin, :] = (x_start_bin+1) - feature_length*bbox[0]
-        x_weights[torch.arange(batch_size), :, end_x_bin, :] = feature_length * bbox[1] - end_x_bin
+        x_weights = torch.zeros(1, feature_length, feature_height).cuda()
+        x_weights[:, x_start_bin+1:end_x_bin, :] = 1.0
+        x_weights[:, x_start_bin, :] = (x_start_bin+1) - feature_length*bbox[0]
+        x_weights[:, end_x_bin, :] = feature_length * bbox[1] - end_x_bin
 
-        y_weights = torch.zeros(batch_size, 1, feature_length, feature_height).cuda()
-        y_weights[torch.arange(batch_size), :, :, start_y_bin + 1:end_y_bin] = 1.0
-        y_weights[torch.arange(batch_size), :, :, start_y_bin] = (start_y_bin + 1) - feature_height * bbox[2]
-        y_weights[torch.arange(batch_size), :, :, end_y_bin] = feature_height * bbox[3] - end_y_bin
+        y_weights = torch.zeros(1, feature_length, feature_height).cuda()
+        y_weights[:, :, start_y_bin + 1:end_y_bin] = 1.0
+        y_weights[:, :, start_y_bin] = (start_y_bin + 1) - feature_height * bbox[2]
+        y_weights[:, :, end_y_bin] = feature_height * bbox[3] - end_y_bin
 
         return x_weights*y_weights
 
@@ -377,6 +410,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
         # init LSTM inputs
         hx, cx = torch.zeros(batch_size, 1024*2).cuda(x.device), torch.zeros(batch_size, 1024*2).cuda(x.device)
         previous_box_embed = torch.zeros(batch_size, 64).cuda(x.device)
+        bbox = torch.zeros(batch_size, 4).cuda(x.device)
+
 
 
         # init losses
@@ -397,11 +432,10 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
         previous_location_features = torch.zeros(batch_size, 2048).cuda(x.device)
 
-
-
         for i in range(6):
-            #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed, previous_location_features), dim=1)
-            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
+            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed, previous_location_features), dim=1)
+            #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
+            #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
             #rnn_input = torch.cat((image_predict, previous_word), dim=1)
 
 
@@ -430,7 +464,13 @@ class ResNet_RetinaNet_RNN(nn.Module):
             bbox_exist = []
             #nouns = self.noun_attn(noun_distribution)
             for ii in range(len(rnn_feature_shapes)):
-                classication = self.classificationModel(rnn_feature_shapes[ii])
+                #pdb.set_trace()
+                if i == 0:
+                    w = torch.zeros(batch_size, 1, rnn_feature_shapes[ii].shape[2], rnn_feature_shapes[ii].shape[3]).cuda()
+                else:
+                    w = all_weights_list[ii]
+
+                classication = self.classificationModel(rnn_feature_shapes[ii], noun_distribution, bbox, w)
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
 
@@ -445,19 +485,19 @@ class ResNet_RetinaNet_RNN(nn.Module):
             #pdb.set_trace()
             #print(classification)
             #pdb.set_trace()
-            noun_distribution_temp = noun_distribution.clone()
+            #noun_distribution_temp = noun_distribution.clone()
             # if torch.any(bbox_exist > 0.5):
             #     noun_distribution_temp[bbox_exist > 0.5, -3] = torch.min(noun_distribution[bbox_exist > 0.5, :], dim=1)[0]
-            classification_guess = torch.argmax(noun_distribution_temp[:, :-2], dim=1)
+            #classification_guess = torch.argmax(noun_distribution_temp[:, :-2], dim=1)
             #pdb.set_trace()
-            best_bbox = torch.argmax(classification[torch.arange(batch_size), :, classification_guess.long()], dim=1)
+            #best_bbox = torch.argmax(classification[torch.arange(batch_size), :, classification_guess.long()], dim=1)
 
-            # best_per_box = torch.max(classification[:, :, :-2], dim=2)[0]
-            # best_bbox = torch.argmax(best_per_box, dim=1)
+            best_per_box = torch.max(classification[:, :, :-2], dim=2)[0]
+            best_bbox = torch.argmax(best_per_box, dim=1)
             # classification_guess = torch.argmax(noun_distribution[:, :-2], dim=1)
 
-            #class_boxes = classification[torch.arange(batch_size), best_bbox, :]
-            #classification_guess = torch.argmax(class_boxes[:, :-2], dim=1)
+            class_boxes = classification[torch.arange(batch_size), best_bbox, :]
+            classification_guess = torch.argmax(class_boxes[:, :-2], dim=1)
 
             if self.training and use_gt_nouns:
                 ground_truth_1 = self.noun_embedding(annotations[:, i, -1].long())
@@ -484,9 +524,30 @@ class ResNet_RetinaNet_RNN(nn.Module):
             perc_start_y = previous_boxes[:, 0] / img_batch.shape[3]
             perc_end_y = previous_boxes[:, 2] / img_batch.shape[3]
 
-            bbox = [perc_start_x, perc_end_x, perc_start_y, perc_end_y]
+            bbox = torch.stack([perc_start_x, perc_end_x, perc_start_y, perc_end_y], dim=1)
+
+            if self.training:
+                bbox[previous_boxes[:, 0] == -1] = -1.0
+            else:
+                bbox[bbox_exist < 0.5] = -1.0
+
+            #pdb.set_trace()
+
+            if self.training:
+                previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1,
+                                                                            batch_size)
+            else:
+                previous_location_features = self.get_local_visual_features(x4, bbox, bbox_exist < 0.5, batch_size)
 
             #previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1, batch_size)
+
+            all_weights_list = []
+            for feature in features:
+                if self.training:
+                    all_weights = self.get_all_weights(feature, bbox, previous_boxes[:, 0] == -1, batch_size)
+                else:
+                    all_weights = self.get_all_weights(feature, bbox, bbox_exist < 0.5, batch_size)
+                all_weights_list.append(all_weights)
 
             prev_widths = torch.ceil(prev_widths * 10).long()
             prev_heights = torch.ceil(prev_heights * 10).long()
