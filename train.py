@@ -112,9 +112,9 @@ def main(args=None):
 		retinanet.module.load_state_dict(x)
 
 	#load_old_weights(retinanet, './retinanet_50.pth')
-	x = torch.load('./retinanet_0.pth')
-	retinanet.module.load_state_dict(x['state_dict'])
-	optimizer.load_state_dict(x['optimizer'])
+	# x = torch.load('./retinanet_0.pth')
+	# retinanet.module.load_state_dict(x['state_dict'])
+	# optimizer.load_state_dict(x['optimizer'])
 	# for param_group in optimizer.param_groups:
 	# 	param_group["lr"] = 0.00001
 
@@ -187,6 +187,8 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		optimizer.zero_grad()
 		image = data['img'].cuda().float()
 		annotations = data['annot'].cuda().float()
+
+		pdb.set_trace()
 		verbs = data['verb_idx'].cuda()
 		widths = data['widths'].cuda()
 		heights = data['heights'].cuda()

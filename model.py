@@ -134,24 +134,24 @@ class ClassificationModel(nn.Module):
         self.output_retina = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
         self.output_act_retina = nn.Sigmoid()
 
-    def forward(self, x, noun_dist, bbox, w):
+    def forward(self, x, noun_dist):
 
         x_directions = (torch.arange(x.shape[2]).float() / x.shape[2]).cuda()
         x_directions = x_directions.view(1, 1, x_directions.shape[0], 1).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
 
         y_directions = (torch.arange(x.shape[3]).float() / x.shape[3]).cuda()
         y_directions = y_directions.view(1, 1, 1, y_directions.shape[0]).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
-        spatial = torch.cat((x_directions, y_directions), dim=1)
-        spatial = self.spatial_conv(spatial)
+        #spatial = torch.cat((x_directions, y_directions), dim=1)
+        #patial = self.spatial_conv(spatial)
 
-        bbox = bbox.view(x.shape[0], 4, 1, 1).expand([x.shape[0], 4, x.shape[2], x.shape[3]])
+        #bbox = bbox.view(x.shape[0], 4, 1, 1).expand([x.shape[0], 4, x.shape[2], x.shape[3]])
 
-        bbox = self.bbox_conv(bbox)
-        mask = self.mask_conv(w)
+        #bbox = self.bbox_conv(bbox)
+        #mask = self.mask_conv(w)
 
-        new_x = torch.cat((x, spatial, bbox, mask), dim=1)
+        #new_x = torch.cat((x, spatial, bbox, mask), dim=1)
 
-        out = self.conv1(new_x)
+        out = self.conv1(x)
         #out = self.bn1(out)
         out = self.act1(out)
         out = self.conv2(out)
@@ -232,8 +232,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.bbox_y_embed = nn.Embedding(11, 16)
 
         # init rnn and rnn weights
-        self.rnn = nn.LSTMCell(2048 + 512 + 64 + 2048, 1024*2)
-        #self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
+        #self.rnn = nn.LSTMCell(2048 + 512 + 64 + 2048, 1024*2)
+        self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
         #self.rnn = nn.LSTMCell(2048 + 512, 1024*2)
 
 
@@ -433,8 +433,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
         previous_location_features = torch.zeros(batch_size, 2048).cuda(x.device)
 
         for i in range(6):
-            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed, previous_location_features), dim=1)
-            #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
+            #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed, previous_location_features), dim=1)
+            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
             #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
             #rnn_input = torch.cat((image_predict, previous_word), dim=1)
 
@@ -533,11 +533,11 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
             #pdb.set_trace()
 
-            if self.training:
-                previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1,
-                                                                            batch_size)
-            else:
-                previous_location_features = self.get_local_visual_features(x4, bbox, bbox_exist < 0.5, batch_size)
+            # if self.training:
+            #     previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1,
+            #                                                                 batch_size)
+            # else:
+            #     previous_location_features = self.get_local_visual_features(x4, bbox, bbox_exist < 0.5, batch_size)
 
             #previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1, batch_size)
 
