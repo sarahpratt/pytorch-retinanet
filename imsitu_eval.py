@@ -68,12 +68,24 @@ class BboxEval:
             smaller_gt_width  = (gt_box[2] - gt_box[0])*0.05
             smaller_gt_length = (gt_box[3] - gt_box[1])*0.05
             adjusted = [gt_box[0] + smaller_gt_width, gt_box[1] + smaller_gt_length, gt_box[2] - smaller_gt_width, gt_box[3] - smaller_gt_length]
-        if self.bb_intersection_over_union(self, pred_box, adjusted):
+        else:
+            adjusted = None
+        if self.bb_intersection_over_union(pred_box, adjusted):
             self.correct_third_boxes += 1.0
 
 
     def third_box(self):
         return self.correct_third_boxes/self.all_third_boxes
+
+
+    def just_bbox(self):
+        sum_value = 0.0
+        total_value = 0.0
+        for verb in self.per_verb_just_bboxes:
+            sum_value += float(self.per_verb_correct_just_bboxes[verb]) / float(self.per_verb_just_bboxes[verb])
+            total_value += 1.0
+        return sum_value / total_value
+
 
     def update(self, pred_verb, pred_nouns, pred_bboxes, gt_verb, gt_nouns, gt_bboxes, verb_order):
         order = verb_order[gt_verb]["order"]
@@ -85,6 +97,8 @@ class BboxEval:
 
         self.per_verb_roles[gt_verb] += len(order)
         self.per_verb_roles_bboxes[gt_verb] += len(order)
+        self.per_verb_just_bboxes[gt_verb] += len(order)
+
 
         if len(order) >= 3:
             self.all_third_boxes += 1.0
@@ -102,6 +116,10 @@ class BboxEval:
                     self.per_verb_roles_correct[gt_verb] += 1.0
                 else:
                     value_all = 0.0
+
+                if self.bb_intersection_over_union(pred_bboxes[i], gt_bboxes[i]):
+                    self.per_verb_correct_just_bboxes[gt_verb] += 1.0
+
                 if pred_nouns[i] in gt_nouns[i] and (self.bb_intersection_over_union(pred_bboxes[i], gt_bboxes[i])):
                     self.per_verb_roles_correct_bboxes[gt_verb] += 1.0
                 else:
