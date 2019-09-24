@@ -25,24 +25,34 @@ classes_file = './annotations/top_80_lstm/classes_80.csv'
 def load_jsons():
     dataset_val = CSVDataset(train_file=val_file, class_list=classes_file, transform=transforms.Compose([Normalizer(), Resizer()]))
     print("loading dev")
+
     with open('./dev.json') as f:
         dev_gt = json.load(f)
     print("loading imsitu_dpace")
+
     with open('./imsitu_space.json') as f:
         all = json.load(f)
         verb_orders = all['verbs']
         all_idx_to_english = all['nouns']
 
+    nouns_set = set()
+    for noun in dataset_val.classes:
+        if noun != "oov":
+            nouns_set.add(noun.split('_')[0])
+
+
+    return dataset_val, dev_gt, verb_orders, all_idx_to_english, nouns_set
+
+
+def load_model(dataset_val):
     retinanet = model.resnet50(num_classes=dataset_val.num_classes(), pretrained=True)
     retinanet = retinanet.cuda()
     retinanet = torch.nn.DataParallel(retinanet).cuda()
 
-    x = torch.load('./retinanet_20.pth')
-    retinanet.module.load_state_dict(x)
-    retinanet.training = False
-    retinanet.eval()
+    x = torch.load('./retinanet_30.pth')
+    retinanet.module.load_state_dict(x['state_dict'])
 
-    return dataset_val, dev_gt, verb_orders, all_idx_to_english, retinanet
+    return retinanet
 
 
 def get_ground_truth(image, image_info, verb_orders):
@@ -62,6 +72,9 @@ def get_ground_truth(image, image_info, verb_orders):
     return verb, nouns, bboxes
 
 def get_color(evaluator, boxes, gt_box, nouns, gt_nouns):
+    print(gt_box)
+    if gt_box != None:
+        gt_box = [item * 2 for item in gt_box]
     if nouns in gt_nouns and (evaluator.bb_intersection_over_union(boxes, gt_box)):
         return (0, 255, 0)
     return (255, 15, 119)
@@ -88,21 +101,33 @@ def load_baselines():
 
 
 evaluator = BboxEval()
-dataset_val, dev_gt, verb_orders, all_idx_to_english, retinanet = load_jsons()
+dataset_val, dev_gt, verb_orders, all_idx_to_english, nouns_set = load_jsons()
+retinanet = load_model(dataset_val)
+retinanet.training = False
+retinanet.eval()
 verb_categorizations = categorize_ims_by_verb(dataset_val)
 gt_baseline, top1_baseline = load_baselines()
+
+
 retinanet.training = False
 
 option_list = []
 for key in verb_categorizations:
     option_list.append(key)
 
-option_list = ['random'] + sorted(option_list)
-selected_verb = st.selectbox('Pick a verb or select random to generate a random image', option_list,  value=0)
-use_gt_verb = st.radio('Predict Verb or use GT', ["GT Verb", "Predict Verb"],  value=0)
+
+with open('verbs.txt', 'w') as f:
+    option_list = ['random'] + sorted(option_list)
+    for option in option_list:
+        f.write(option)
+        f.write('\n')
+
+selected_verb = st.selectbox('Pick a verb or select random to generate a random image', option_list, index=0)
+use_gt_verb = st.radio('Predict Verb or use GT', ["GT Verb", "Predict Verb"],  index=0)
 print()
 st.button('generate')
-v = option_list[selected_verb]
+
+v = selected_verb
 if v == 'random':
     data_idx = random.randint(0, dataset_val.__len__())
 else:
@@ -117,9 +142,11 @@ heights = torch.tensor(im_data.shape[3]).unsqueeze(0).cuda().float()
 
 image = data['img_name'].split('/')[-1]
 
-gt_value = use_gt_verb == 0
-retinanet.use_gt_verb = True
-verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([im_data, verb_idx_data, widths, heights], False, False, gt_value)
+gt_value = use_gt_verb == "GT Verb"
+print(use_gt_verb)
+#retinanet.use_gt_verb = True
+
+verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([im_data, verb_idx_data, widths, heights], widths, False, False, gt_value)
 
 if gt_value:
     baseline = gt_baseline[image]
@@ -154,16 +181,18 @@ im_size = 230
 
 for i in range(6):
 
-    if len(order_gt) <= i and len(order_pred) <= i:
-        break
+    # if len(order_gt) <= i and len(order_pred) <= i:
+    #     break
 
     if len(order_gt) <= i:
         im_file_gt = Image.new('RGB', (im_size, im_size), "white")
         cap_gt = " "
     else:
-        im_file_gt = evaluator.visualize_for_demo(boxes_gt[i], image, (255, 255, 255))
+        color = (0, 0, 255)
         cap_gt = order_gt[i] + ": "
         for noun in nouns_gt[i]:
+            if noun == '' or noun in nouns_set:
+                color = (255, 255, 255)
             if noun == '':
                 w = 'N/A'
             elif noun in all_idx_to_english:
@@ -171,6 +200,9 @@ for i in range(6):
             else:
                 w = noun
             cap_gt += w + ", "
+
+        im_file_gt = evaluator.visualize_for_demo(boxes_gt[i], image, color)
+
 
 
     if len(order_baseline) <= i:
@@ -231,7 +263,11 @@ for i in range(6):
     if len(cap_gt) > 20:
         cap_gt = cap_gt[:20]
 
+    if len(cap_gt) > 70:
+        cap_gt = cap_gt[:70]
+
 
     st.image([new_im_gt, new_im_gt_baseline, new_im_gt_pred], caption=[cap_gt, cap_baseline, cap_pred])
+    #st.image([new_im_gt], caption=[cap_gt])
 
 

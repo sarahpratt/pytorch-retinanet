@@ -194,8 +194,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.bbox_y_embed = nn.Embedding(11, 16)
 
         # init rnn and rnn weights
-        self.rnn = nn.LSTMCell(2048 + 512 + 64 + 2048, 1024*2)
-        #self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
+        #self.rnn = nn.LSTMCell(2048 + 512 + 64 + 2048, 1024*2)
+        self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
         #self.rnn = nn.LSTMCell(2048 + 512, 1024*2)
 
 
@@ -362,8 +362,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
 
         for i in range(6):
-            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed, previous_location_features), dim=1)
-            #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
+            #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed, previous_location_features), dim=1)
+            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
             #rnn_input = torch.cat((image_predict, previous_word), dim=1)
 
 
@@ -439,9 +439,9 @@ class ResNet_RetinaNet_RNN(nn.Module):
             perc_start_y = previous_boxes[:, 0] / img_batch.shape[3]
             perc_end_y = previous_boxes[:, 2] / img_batch.shape[3]
 
-            bbox = [perc_start_x, perc_end_x, perc_start_y, perc_end_y]
+            #bbox = [perc_start_x, perc_end_x, perc_start_y, perc_end_y]
 
-            previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1, batch_size)
+            #previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1, batch_size)
 
             prev_widths = torch.ceil(prev_widths * 10).long()
             prev_heights = torch.ceil(prev_heights * 10).long()
