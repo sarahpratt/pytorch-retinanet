@@ -19,6 +19,9 @@ class BboxEval:
         self.all_verbs = 0.0
         self.correct_verbs = 0.0
 
+        self.all_third_boxes = 0.0
+        self.correct_third_boxes = 0.0
+
 
     def verb(self):
         return self.correct_verbs/self.all_verbs
@@ -60,6 +63,18 @@ class BboxEval:
         return sum_value / total_value
 
 
+    def update_third_box(self, pred_box, gt_box):
+        if gt_box != None:
+            smaller_gt_width  = (gt_box[2] - gt_box[0])*0.05
+            smaller_gt_length = (gt_box[3] - gt_box[1])*0.05
+            adjusted = [gt_box[0] + smaller_gt_width, gt_box[1] + smaller_gt_length, gt_box[2] - smaller_gt_width, gt_box[3] - smaller_gt_length]
+        if self.bb_intersection_over_union(self, pred_box, adjusted):
+            self.correct_third_boxes += 1.0
+
+
+    def third_box(self):
+        return self.correct_third_boxes/self.all_third_boxes
+
     def update(self, pred_verb, pred_nouns, pred_bboxes, gt_verb, gt_nouns, gt_bboxes, verb_order):
         order = verb_order[gt_verb]["order"]
         #order = ["agent", "tool"]
@@ -70,6 +85,10 @@ class BboxEval:
 
         self.per_verb_roles[gt_verb] += len(order)
         self.per_verb_roles_bboxes[gt_verb] += len(order)
+
+        if len(order) >= 3:
+            self.all_third_boxes += 1.0
+            self.update_third_box(pred_bboxes[2], gt_bboxes[0])
 
         if len(pred_nouns) == 0:
             pdb.set_trace()

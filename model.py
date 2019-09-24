@@ -116,7 +116,7 @@ class ClassificationModel(nn.Module):
         self.bbox_conv = nn.Conv2d(4, 64, kernel_size=1)
         self.mask_conv = nn.Conv2d(1, 64, kernel_size=1)
 
-        self.conv1 = nn.Conv2d(num_features_in + 64 + 64 + 64, feature_size, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
         #self.bn1 = nn.BatchNorm2d(feature_size)
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
@@ -136,11 +136,11 @@ class ClassificationModel(nn.Module):
 
     def forward(self, x, noun_dist):
 
-        x_directions = (torch.arange(x.shape[2]).float() / x.shape[2]).cuda()
-        x_directions = x_directions.view(1, 1, x_directions.shape[0], 1).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
-
-        y_directions = (torch.arange(x.shape[3]).float() / x.shape[3]).cuda()
-        y_directions = y_directions.view(1, 1, 1, y_directions.shape[0]).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
+        # x_directions = (torch.arange(x.shape[2]).float() / x.shape[2]).cuda()
+        # x_directions = x_directions.view(1, 1, x_directions.shape[0], 1).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
+        #
+        # y_directions = (torch.arange(x.shape[3]).float() / x.shape[3]).cuda()
+        # y_directions = y_directions.view(1, 1, 1, y_directions.shape[0]).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
         #spatial = torch.cat((x_directions, y_directions), dim=1)
         #patial = self.spatial_conv(spatial)
 
@@ -178,7 +178,7 @@ class ClassificationModel(nn.Module):
         #nouns = F.softmax(nouns.view(x.shape[0], 1, self.num_classes), dim=2)
         #return F.softmax(out2.contiguous().view(x.shape[0], -1, self.num_classes), dim=2)*nouns, bbox_exists
         #return out2.contiguous().view(x.shape[0], -1, self.num_classes), bbox_exists
-        return out2.contiguous().view(new_x.shape[0], -1, self.num_classes), bbox_exists
+        return out2.contiguous().view(x.shape[0], -1, self.num_classes), bbox_exists
 
 
 class LearnableVector(nn.Module):
@@ -213,6 +213,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.clipBoxes = ClipBoxes()
         self.focalLoss = losses.FocalLoss()
         self.cat_features = cat_features
+
+        self.use_expert = False
 
 
         #self.noun_attn = LearnableVector(num_classes)
@@ -363,7 +365,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
         return x_weights*y_weights
 
 
-    def forward(self, inputs, roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
+    def forward(self, inputs,roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
 
         if self.training:
             img_batch, annotations, verb, widths, heights = inputs
@@ -470,7 +472,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 else:
                     w = all_weights_list[ii]
 
-                classication = self.classificationModel(rnn_feature_shapes[ii], noun_distribution, bbox, w)
+                classication = self.classificationModel(rnn_feature_shapes[ii], noun_distribution)
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
 
@@ -492,12 +494,14 @@ class ResNet_RetinaNet_RNN(nn.Module):
             #pdb.set_trace()
             #best_bbox = torch.argmax(classification[torch.arange(batch_size), :, classification_guess.long()], dim=1)
 
-            best_per_box = torch.max(classification[:, :, :-2], dim=2)[0]
-            best_bbox = torch.argmax(best_per_box, dim=1)
-            # classification_guess = torch.argmax(noun_distribution[:, :-2], dim=1)
-
-            class_boxes = classification[torch.arange(batch_size), best_bbox, :]
-            classification_guess = torch.argmax(class_boxes[:, :-2], dim=1)
+            if self.use_expert:
+                best_per_box = torch.max(classification[:, :, :-2], dim=2)[0]
+                best_bbox = torch.argmax(best_per_box, dim=1)
+                class_boxes = classification[torch.arange(batch_size), best_bbox, :]
+                classification_guess = torch.argmax(class_boxes[:, :-2], dim=1)
+            else:
+                classification_guess = torch.argmax(noun_distribution[:, :-2], dim=1)
+                best_bbox = torch.argmax(classification[torch.arange(batch_size), :, classification_guess.long()], dim=1)
 
             if self.training and use_gt_nouns:
                 ground_truth_1 = self.noun_embedding(annotations[:, i, -1].long())

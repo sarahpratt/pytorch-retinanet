@@ -57,6 +57,7 @@ def main(args=None):
 	parser.add_argument("--weighted-verb-loss", action="store_true", default=False)
 	parser.add_argument("--just-class-loss", action="store_true", default=False)
 	parser.add_argument("--retina-loss", action="store_true", default=False)
+	parser.add_argument("--expert", action="store_true", default=False)
 	parser.add_argument("--only-resnet", action="store_true", default=False)
 	parser.add_argument("--warmup", action="store_true", default=False)
 	parser.add_argument("--warmup2", action="store_true", default=False)
@@ -85,6 +86,8 @@ def main(args=None):
 	retinanet = create_model(parser, dataset_train)
 	retinanet.additional_class_branch = parser.rnn_class
 	retinanet = torch.nn.DataParallel(retinanet).cuda()
+
+	retinanet.use_expert = parser.expert
 
 	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
 	#
@@ -188,7 +191,16 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		image = data['img'].cuda().float()
 		annotations = data['annot'].cuda().float()
 
-		pdb.set_trace()
+		fifth_of_height = (annotations[:, 0, 2] - annotations[:, 0, 0]) * 0.05
+		fifth_of_width = (annotations[:, 0, 3] - annotations[:, 0, 1]) * 0.05
+
+		annotations[:, 2, 0] = annotations[:, 0, 0] + fifth_of_height
+		annotations[:, 2, 2] = annotations[:, 0, 2] - fifth_of_height
+		annotations[:, 2, 1] = annotations[:, 0, 1] + fifth_of_width
+		annotations[:, 2, 3] = annotations[:, 0, 3] - fifth_of_width
+
+
+		#pdb.set_trace()
 		verbs = data['verb_idx'].cuda()
 		widths = data['widths'].cuda()
 		heights = data['heights'].cuda()
@@ -289,6 +301,8 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 	writer.add_scalar("val/value_all", evaluator.value_all(), epoch_num)
 	writer.add_scalar("val/value_bbox", evaluator.value_bbox(), epoch_num)
 	writer.add_scalar("val/value_all_bbox", evaluator.value_all_bbox(), epoch_num)
+	writer.add_scalar("val/third_box", evaluator.third_box(), epoch_num)
+
 
 
 def create_model(parser, dataset_train):
