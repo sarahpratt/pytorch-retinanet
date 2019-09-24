@@ -467,10 +467,10 @@ class ResNet_RetinaNet_RNN(nn.Module):
             #nouns = self.noun_attn(noun_distribution)
             for ii in range(len(rnn_feature_shapes)):
                 #pdb.set_trace()
-                if i == 0:
-                    w = torch.zeros(batch_size, 1, rnn_feature_shapes[ii].shape[2], rnn_feature_shapes[ii].shape[3]).cuda()
-                else:
-                    w = all_weights_list[ii]
+                # if i == 0:
+                #     w = torch.zeros(batch_size, 1, rnn_feature_shapes[ii].shape[2], rnn_feature_shapes[ii].shape[3]).cuda()
+                # else:
+                #     w = all_weights_list[ii]
 
                 classication = self.classificationModel(rnn_feature_shapes[ii], noun_distribution)
                 bbox_exist.append(classication[1])
@@ -545,13 +545,13 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
             #previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1, batch_size)
 
-            all_weights_list = []
-            for feature in features:
-                if self.training:
-                    all_weights = self.get_all_weights(feature, bbox, previous_boxes[:, 0] == -1, batch_size)
-                else:
-                    all_weights = self.get_all_weights(feature, bbox, bbox_exist < 0.5, batch_size)
-                all_weights_list.append(all_weights)
+            # all_weights_list = []
+            # for feature in features:
+            #     if self.training:
+            #         all_weights = self.get_all_weights(feature, bbox, previous_boxes[:, 0] == -1, batch_size)
+            #     else:
+            #         all_weights = self.get_all_weights(feature, bbox, bbox_exist < 0.5, batch_size)
+            #     all_weights_list.append(all_weights)
 
             prev_widths = torch.ceil(prev_widths * 10).long()
             prev_heights = torch.ceil(prev_heights * 10).long()
