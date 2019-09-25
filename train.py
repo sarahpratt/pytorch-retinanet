@@ -110,8 +110,9 @@ def main(args=None):
 		retinanet.module.load_state_dict(x)
 
 	#load_old_weights(retinanet, './retinanet_50.pth')
-	# x = torch.load('./retinanet_54.pth')
-	# retinanet.module.load_state_dict(x['state_dict'])
+	print("loading weights")
+	x = torch.load('./retinanet_30.pth')
+	retinanet.module.load_state_dict(x['state_dict'])
 	# optimizer.load_state_dict(x['optimizer'])
 	# for param_group in optimizer.param_groups:
 	# 	param_group["lr"] = 0.00001
@@ -123,10 +124,10 @@ def main(args=None):
 
 	for epoch_num in range(parser.resume_epoch, parser.epochs):
 
-		train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, role_tensor)
+		#train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, role_tensor)
 
-		if epoch_num % 2 == 0:
-			torch.save({'state_dict': retinanet.module.state_dict(), 'optimizer': optimizer.state_dict()}, log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
+		#if epoch_num % 2 == 0:
+		#	torch.save({'state_dict': retinanet.module.state_dict(), 'optimizer': optimizer.state_dict()}, log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
 
 		if epoch_num%1 == 0:
 			print('Evaluating dataset')
@@ -258,7 +259,7 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 		heights = data['heights'].cuda()
 		roles = role_tensor[y].cuda()
 
-		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights], roles, use_gt_verb=True)
+		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights], roles, use_gt_verb=False)
 		for i in range(len(verb_guess)):
 			image = data['img_name'][i].split('/')[-1]
 			verb = dataset_train.idx_to_verb[verb_guess[i]]
@@ -281,6 +282,8 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 	writer.add_scalar("val/value_all", evaluator.value_all(), epoch_num)
 	writer.add_scalar("val/value_bbox", evaluator.value_bbox(), epoch_num)
 	writer.add_scalar("val/value_all_bbox", evaluator.value_all_bbox(), epoch_num)
+	writer.add_scalar("val/just_bbox", evaluator.just_bbox(), epoch_num)
+
 
 
 def create_model(parser, dataset_train):

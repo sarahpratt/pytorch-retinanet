@@ -19,6 +19,9 @@ class BboxEval:
         self.all_verbs = 0.0
         self.correct_verbs = 0.0
 
+        self.per_verb_just_bboxes = defaultdict(float)
+        self.per_verb_correct_just_bboxes = defaultdict(float)
+
 
     def verb(self):
         return self.correct_verbs/self.all_verbs
@@ -59,6 +62,14 @@ class BboxEval:
             total_value += 1.0
         return sum_value / total_value
 
+    def just_bbox(self):
+        sum_value = 0.0
+        total_value = 0.0
+        for verb in self.per_verb_just_bboxes:
+            sum_value += float(self.per_verb_correct_just_bboxes[verb]) / float(self.per_verb_just_bboxes[verb])
+            total_value += 1.0
+        return sum_value / total_value
+
 
     def update(self, pred_verb, pred_nouns, pred_bboxes, gt_verb, gt_nouns, gt_bboxes, verb_order):
         order = verb_order[gt_verb]["order"]
@@ -70,6 +81,8 @@ class BboxEval:
 
         self.per_verb_roles[gt_verb] += len(order)
         self.per_verb_roles_bboxes[gt_verb] += len(order)
+        self.per_verb_just_bboxes[gt_verb] += len(order)
+
 
         if len(pred_nouns) == 0:
             pdb.set_trace()
@@ -83,6 +96,10 @@ class BboxEval:
                     self.per_verb_roles_correct[gt_verb] += 1.0
                 else:
                     value_all = 0.0
+
+                if self.bb_intersection_over_union(pred_bboxes[i], gt_bboxes[i]):
+                    self.per_verb_correct_just_bboxes[gt_verb] += 1.0
+
                 if pred_nouns[i] in gt_nouns[i] and (self.bb_intersection_over_union(pred_bboxes[i], gt_bboxes[i])):
                     self.per_verb_roles_correct_bboxes[gt_verb] += 1.0
                 else:
