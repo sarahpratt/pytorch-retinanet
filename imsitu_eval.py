@@ -16,6 +16,9 @@ class BboxEval:
         self.per_verb_roles = defaultdict(float)
         self.per_verb_roles_correct = defaultdict(float)
 
+        self.per_verb_just_bboxes = defaultdict(float)
+        self.per_verb_correct_just_bboxes = defaultdict(float)
+
         self.all_verbs = 0.0
         self.correct_verbs = 0.0
 

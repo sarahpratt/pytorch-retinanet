@@ -115,8 +115,8 @@ def main(args=None):
 		retinanet.module.load_state_dict(x)
 
 	#load_old_weights(retinanet, './retinanet_50.pth')
-	x = torch.load('./retinanet_0.pth')
-	retinanet.module.load_state_dict(x['state_dict'])
+	# x = torch.load('./retinanet_0.pth')
+	# retinanet.module.load_state_dict(x['state_dict'])
 	# optimizer.load_state_dict(x['optimizer'])
 	# for param_group in optimizer.param_groups:
 	# 	param_group["lr"] = 0.00001
@@ -274,11 +274,13 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 		k += 1
 		x = data['img'].cuda().float()
 		y = data['verb_idx'].cuda()
+		annotations = data['annot'].cuda().float()
+
 		widths = data['widths'].cuda()
 		heights = data['heights'].cuda()
 		roles = role_tensor[y].cuda()
 
-		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights], roles, use_gt_verb=True)
+		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, annotations, y, widths, heights], roles, use_gt_verb=True)
 		for i in range(len(verb_guess)):
 			image = data['img_name'][i].split('/')[-1]
 			verb = dataset_train.idx_to_verb[verb_guess[i]]
