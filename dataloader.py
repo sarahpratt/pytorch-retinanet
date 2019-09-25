@@ -24,7 +24,7 @@ from PIL import Image
 class CSVDataset(Dataset):
     """CSV dataset."""
 
-    def __init__(self, train_file, class_list, transform=None, is_visualizing=False):
+    def __init__(self, train_file, class_list, noun_list, transform=None, is_visualizing=False):
         """
         Args:
             train_file (string): CSV file with training annotations
@@ -35,11 +35,14 @@ class CSVDataset(Dataset):
         self.class_list = class_list
         self.transform = transform
         self.is_visualizing = is_visualizing
+        self.noun_list = noun_list
 
         # parse the provided class file
         try:
             with open(self.class_list, 'r') as file:
-                self.classes, self.idx_to_class, self.idx_to_english = self.load_classes(csv.reader(file, delimiter=','))
+                self.classes = self.load_classes(csv.reader(file, delimiter=','))
+            with open(self.noun_list, 'r') as file:
+                self.nouns = self.load_classes(csv.reader(file, delimiter=','))
         except ValueError as e:
             #raise_from(ValueError('invalid CSV class file: {}: {}'.format(self.class_list, e)), None)
             ValueError('invalid CSV class file: {}: {}'.format(self.class_list, e))
@@ -105,9 +108,6 @@ class CSVDataset(Dataset):
 
     def load_classes(self, csv_reader):
         result = {}
-        idx_to_result = []
-        idx_to_english = {}
-
         for line, row in enumerate(csv_reader):
             line += 1
 
@@ -121,12 +121,7 @@ class CSVDataset(Dataset):
             if class_name in result:
                 raise ValueError('line {}: duplicate class name: \'{}\''.format(line, class_name))
             result[class_name] = class_id
-            idx_to_result.append(class_name.split('_')[0])
-            if class_name != 'oov' and class_name != 'not_applicable' and class_name != 'Pad':
-                idx_to_english[class_name.split('_')[0]] = class_name.split('_')[1]
-            else:
-                idx_to_english[class_name] = class_name
-        return result, idx_to_result, idx_to_english
+        return result
 
 
     def __len__(self):
@@ -158,7 +153,7 @@ class CSVDataset(Dataset):
     def load_annotations(self, image_index):
         # get ground truth annotations
         annotation_list = self.image_data[self.image_names[image_index]]
-        annotations     = np.zeros((0, 7))
+        annotations     = np.zeros((0, 8))
 
         # some images appear to miss annotations (like image with id 257034)
         if len(annotation_list) == 0:
@@ -183,16 +178,17 @@ class CSVDataset(Dataset):
             #    continue
 
             #annotation = np.zeros((1, 5))
-            annotation        = np.zeros((1, 7)) #allow for 3 annotations
+            annotation        = np.zeros((1, 8)) #allow for 3 annotations
 
             annotation[0, 0] = x1
             annotation[0, 1] = y1
             annotation[0, 2] = x2
             annotation[0, 3] = y2
 
-            annotation[0, 4]  = self.name_to_label(a['class1'])
-            annotation[0, 5] = self.name_to_label(a['class2'])
-            annotation[0, 6] = self.name_to_label(a['class3'])
+            annotation[0, 4] = self.name_to_label(a['role_class'])
+            annotation[0, 5]  = self.noun_to_label(a['class1'])
+            annotation[0, 6] = self.noun_to_label(a['class2'])
+            annotation[0, 7] = self.noun_to_label(a['class3'])
             annotations       = np.append(annotations, annotation, axis=0)
 
         return annotations
@@ -203,7 +199,7 @@ class CSVDataset(Dataset):
             line += 1
 
             try:
-                img_file, x1, y1, x2, y2, class1, class2, class3 = row[:8]
+                img_file, x1, y1, x2, y2, role_class, class1, class2, class3 = row[:9]
             except ValueError:
                 print('line {}: format should be \'img_file,x1,y1,x2,y2,class_name\' or \'img_file,,,,,\''.format(line))
                 #raise_from(ValueError('line {}: format should be \'img_file,x1,y1,x2,y2,class_name\' or \'img_file,,,,,\''.format(line)), None)
@@ -213,7 +209,7 @@ class CSVDataset(Dataset):
                 result[img_file] = []
 
             # If a row contains only an image path, it's an image without annotations.
-            if (x1, y1, x2, y2, class1, class2, class3) == ('', '', '', '', '', '', ''):
+            if (x1, y1, x2, y2, role_class, class1, class2, class3) == ('', '', '', '', '', '', '', ''):
                 continue
 
             x1 = self._parse(x1, int, 'line {}: malformed x1: {{}}'.format(line))
@@ -229,12 +225,8 @@ class CSVDataset(Dataset):
                 raise ValueError('line {}: y2 ({}) must be higher than y1 ({})'.format(line, y2, y1))
 
             # check if the current class name is correctly present
-            if class1 not in classes:
+            if role_class not in classes:
                 raise ValueError('line {}: unknown class name: \'{}\' (classes: {})'.format(line, class1, classes))
-            if class2 not in classes and class2 != 'None':
-                raise ValueError('line {}: unknown class name: \'{}\' (classes: {})'.format(line, class2, classes))
-            if class3 not in classes and class3 != 'None':
-                raise ValueError('line {}: unknown class name: \'{}\' (classes: {})'.format(line, class3, classes))
 
             #set class2 and class3 equal to class1 if they are none. Class1 is guarenteed a values and each unique class
             #is only counted once so this does not change the value
@@ -244,11 +236,14 @@ class CSVDataset(Dataset):
             if class3 == 'None':
                 class3 = class1
 
-            result[img_file].append({'x1': x1, 'x2': x2, 'y1': y1, 'y2': y2, 'class1': class1, 'class2': class2, 'class3': class3})
+            result[img_file].append({'x1': x1, 'x2': x2, 'y1': y1, 'y2': y2, 'role_class': role_class, 'class1': class1, 'class2': class2, 'class3': class3})
         return result
 
     def name_to_label(self, name):
         return self.classes[name]
+
+    def noun_to_label(self, name):
+        return self.nouns[name]
 
     def label_to_name(self, label):
         return self.labels[label]
@@ -288,7 +283,7 @@ def collater(data):
     
     if max_num_annots > 0:
 
-        annot_padded = torch.ones((len(annots), max_num_annots, 7)) * -1
+        annot_padded = torch.ones((len(annots), max_num_annots, 8)) * -1
 
         if max_num_annots > 0:
             for idx, annot in enumerate(annots):
@@ -296,7 +291,7 @@ def collater(data):
                 if annot.shape[0] > 0:
                     annot_padded[idx, :annot.shape[0], :] = annot
     else:
-        annot_padded = torch.ones((len(annots), 1, 7)) * -1
+        annot_padded = torch.ones((len(annots), 1, 8)) * -1
 
 
     padded_imgs = padded_imgs.permute(0, 3, 1, 2)

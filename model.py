@@ -134,7 +134,7 @@ class ClassificationModel(nn.Module):
         self.output_retina = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
         self.output_act_retina = nn.Sigmoid()
 
-    def forward(self, x, noun_dist):
+    def forward(self, x):
 
         x_directions = (torch.arange(x.shape[2]).float() / x.shape[2]).cuda()
         x_directions = x_directions.view(1, 1, x_directions.shape[0], 1).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
@@ -367,12 +367,14 @@ class ResNet_RetinaNet_RNN(nn.Module):
         return x_weights*y_weights
 
 
-    def forward(self, inputs,roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
+    def forward(self, inputs, roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
 
-        # if self.training:
-        #     img_batch, annotations, verb, widths, heights = inputs
-        # else:
-        img_batch, annotations, verb, widths, heights = inputs
+        if self.training:
+            img_batch, annotations, verb, widths, heights = inputs
+        else:
+            img_batch, verb, widths, heights = inputs
+
+        #pdb.set_trace()
 
         batch_size = img_batch.shape[0]
 
@@ -417,7 +419,6 @@ class ResNet_RetinaNet_RNN(nn.Module):
         bbox = torch.zeros(batch_size, 4).cuda(x.device)
 
 
-
         # init losses
         all_class_loss = 0
         all_bbox_loss = 0
@@ -437,23 +438,18 @@ class ResNet_RetinaNet_RNN(nn.Module):
         previous_location_features = torch.zeros(batch_size, 2048).cuda(x.device)
 
         for i in range(6):
-            #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed, previous_location_features), dim=1)
             rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
-            #rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
-            #rnn_input = torch.cat((image_predict, previous_word), dim=1)
-
-
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
             #noun_attention = self.noun_fc(hx)
-            noun_distribution = self.noun_fc(hx)
+            #noun_distribution = self.noun_fc(hx)
 
-            if self.training:
-                gt = torch.zeros(batch_size, self.num_classes).cuda(x.device)
-                gt[torch.arange(batch_size), annotations[:, i, -1].long()] = 1
-                gt[torch.arange(batch_size), annotations[:, i, -2].long()] = 1
-                gt[torch.arange(batch_size), annotations[:, i, -3].long()] = 1
-                noun_loss += F.binary_cross_entropy_with_logits(noun_distribution, gt.float())
+            # if self.training:
+            #     gt = torch.zeros(batch_size, self.num_classes).cuda(x.device)
+            #     gt[torch.arange(batch_size), annotations[:, i, -1].long()] = 1
+            #     gt[torch.arange(batch_size), annotations[:, i, -2].long()] = 1
+            #     gt[torch.arange(batch_size), annotations[:, i, -3].long()] = 1
+            #     noun_loss += F.binary_cross_entropy_with_logits(noun_distribution, gt.float())
 
 
             just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
@@ -474,7 +470,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 # else:
                 #     w = all_weights_list[ii]
 
-                classication = self.classificationModel(rnn_feature_shapes[ii], noun_distribution)
+                classication = self.classificationModel(rnn_feature_shapes[ii])
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
 
@@ -496,24 +492,17 @@ class ResNet_RetinaNet_RNN(nn.Module):
             #pdb.set_trace()
             #best_bbox = torch.argmax(classification[torch.arange(batch_size), :, classification_guess.long()], dim=1)
 
-            if self.use_expert:
-                best_per_box = torch.max(classification[:, :, :-2], dim=2)[0]
-                best_bbox = torch.argmax(best_per_box, dim=1)
-                class_boxes = classification[torch.arange(batch_size), best_bbox, :]
-                classification_guess = torch.argmax(class_boxes[:, :-2], dim=1)
-            else:
-                classification_guess = torch.argmax(noun_distribution[:, :-2], dim=1)
-                best_bbox = torch.argmax(classification[torch.arange(batch_size), :, classification_guess.long()], dim=1)
+            best_per_box = torch.max(classification, dim=2)[0]
+            best_bbox = torch.argmax(best_per_box, dim=1)
+            class_boxes = classification[torch.arange(batch_size), best_bbox, :]
+            classification_guess = torch.argmax(class_boxes, dim=1)
 
             if self.training and use_gt_nouns:
-                ground_truth_1 = self.noun_embedding(annotations[:, i, -1].long())
-                ground_truth_2 = self.noun_embedding(annotations[:, i, -2].long())
-                ground_truth_3 = self.noun_embedding(annotations[:, i, -3].long())
-                previous_word = torch.stack([ground_truth_1, ground_truth_2, ground_truth_3]).mean(dim=0)
+                previous_word = self.noun_embedding(annotations[:, i, -4].long())
             else:
                 previous_word = self.noun_embedding(classification_guess)
 
-            if self.training or i == 0:
+            if self.training:
                 previous_boxes = annotations[:, i, :4]
             else:
                 transformed_anchors = self.regressBoxes(anchors, regression)
@@ -598,7 +587,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             all_reg_loss += reg_loss
             all_bbox_loss += bbox_loss
 
-            return all_class_loss, all_reg_loss, verb_loss, all_bbox_loss, noun_loss
+            return all_class_loss, all_reg_loss, verb_loss, all_bbox_loss
         else:
             if use_gt_verb:
                 return verb, noun_predicts, bbox_predicts, bbox_exist_list

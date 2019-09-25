@@ -74,7 +74,7 @@ class FocalLoss(nn.Module):
             IoU = calc_iou(anchors[0, :, :], bbox_annotation[:, :4]) # num_anchors x num_annotations
             IoU = IoU.transpose(0, 1)
 
-            IoU_max, IoU_argmax = torch.max(IoU, dim=1) # num_anchors x 1
+            #IoU_max, IoU_argmax = torch.max(IoU, dim=1) # num_anchors x 1
             #pdb.set_trace()
 
             # compute the loss for classification
@@ -94,13 +94,8 @@ class FocalLoss(nn.Module):
                 if bbox_exists_tensor[j, bbox_number]:
                     #pdb.set_trace()
                     targets[bbox_number, torch.ge(IoU[bbox_number, :], 0.5), bbox_annotation[bbox_number, 4].long()] = 1
-                    targets[bbox_number, torch.ge(IoU[bbox_number, :], 0.5), bbox_annotation[bbox_number, 5].long()] = 1
-                    targets[bbox_number, torch.ge(IoU[bbox_number, :], 0.5), bbox_annotation[bbox_number, 6].long()] = 1
-
                 else:
                     targets[bbox_number, :, bbox_annotation[bbox_number, 4].long()] = 1
-                    targets[bbox_number, :, bbox_annotation[bbox_number, 5].long()] = 1
-                    targets[bbox_number, :, bbox_annotation[bbox_number, 6].long()] = 1
                     classification_denomintator[bbox_number] = targets.shape[1]
 
 

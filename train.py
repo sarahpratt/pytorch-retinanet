@@ -36,6 +36,7 @@ def main(args=None):
 	parser.add_argument('--train-file', help='Path to file containing training annotations (see readme)')
 	parser.add_argument('--classes-file', help='Path to file containing class list (see readme)')
 	parser.add_argument('--val-file', help='Path to file containing validation annotations (optional, see readme)')
+	parser.add_argument('--noun-file', help='Path to file containing validation annotations (optional, see readme)')
 	parser.add_argument('--depth', help='Resnet depth, must be one of 18, 34, 50, 101, 152', type=int, default=50)
 	parser.add_argument('--epochs', help='Number of epochs', type=int, default=100)
 	parser.add_argument('--title', type=str, default='')
@@ -191,13 +192,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		image = data['img'].cuda().float()
 		annotations = data['annot'].cuda().float()
 
-		fifth_of_height = (annotations[:, 0, 2] - annotations[:, 0, 0]) * 0.05
-		fifth_of_width = (annotations[:, 0, 3] - annotations[:, 0, 1]) * 0.05
-
-		annotations[:, 2, 0] = annotations[:, 0, 0] + fifth_of_height
-		annotations[:, 2, 2] = annotations[:, 0, 2] - fifth_of_height
-		annotations[:, 2, 1] = annotations[:, 0, 1] + fifth_of_width
-		annotations[:, 2, 3] = annotations[:, 0, 3] - fifth_of_width
+		#pdb.set_trace()
 
 
 		#pdb.set_trace()
@@ -206,7 +201,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		heights = data['heights'].cuda()
 		roles = role_tensor[verbs].cuda()
 
-		class_loss, reg_loss, verb_loss, bbox_loss, all_rnn_class_loss = retinanet([image, annotations, verbs, widths, heights], roles,
+		class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs, widths, heights], roles,
 															   deatch_resnet, use_gt_nouns)
 
 
@@ -214,7 +209,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		avg_reg_loss += reg_loss.mean().item()
 		avg_bbox_loss += bbox_loss.mean().item()
 		avg_verb_loss += verb_loss.mean().item()
-		avg_rnn_class_loss += all_rnn_class_loss.mean().item()
+		#avg_rnn_class_loss += all_rnn_class_loss.mean().item()
 
 		if i % 100 == 0:
 
@@ -230,14 +225,11 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 							  epoch_num * (len(dataloader_train)) + i)
 			writer.add_scalar("train/verb_loss", avg_verb_loss / 100,
 							  epoch_num * (len(dataloader_train)) + i)
-			writer.add_scalar("train/rnn_class_loss", avg_rnn_class_loss / 100,
-							  epoch_num * (len(dataloader_train)) + i)
 
 			avg_class_loss = 0.0
 			avg_reg_loss = 0.0
 			avg_bbox_loss = 0.0
 			avg_verb_loss = 0.0
-			avg_rnn_class_loss = 0.0
 
 		if parser.just_verb_loss:
 			loss = verb_loss.mean()
@@ -250,9 +242,9 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		elif parser.no_rnn_loss:
 			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
 		elif parser.weighted_verb_loss and not deatch_resnet:
-			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()*0.01 + all_rnn_class_loss.mean()
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()*0.01
 		else:
-			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean() + all_rnn_class_loss.mean()
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
 
 		if bool(loss == 0):
 			continue
@@ -280,14 +272,14 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 		heights = data['heights'].cuda()
 		roles = role_tensor[y].cuda()
 
-		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, annotations, y, widths, heights], roles, use_gt_verb=True)
+		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights], roles, use_gt_verb=True)
 		for i in range(len(verb_guess)):
 			image = data['img_name'][i].split('/')[-1]
 			verb = dataset_train.idx_to_verb[verb_guess[i]]
 			nouns = []
 			bboxes = []
 			for j in range(6):
-				if dataset_train.idx_to_class[noun_predicts[j][i]] == 'not':
+				if dataset_train.idx_to_class[noun_predicts[j][i]] == 'nothing':
 					nouns.append('')
 				else:
 					nouns.append(dataset_train.idx_to_class[noun_predicts[j][i]])
@@ -324,14 +316,14 @@ def create_model(parser, dataset_train):
 
 
 def init_data(parser):
-	dataset_train = CSVDataset(train_file=parser.train_file, class_list=parser.classes_file,
+	dataset_train = CSVDataset(train_file=parser.train_file, class_list=parser.classes_file, noun_list=parser.noun_file,
 							   transform=transforms.Compose([Normalizer(), Augmenter(parser.augment), Resizer()]))
 
 	if parser.val_file is None:
 		dataset_val = None
 		print('No validation annotations provided.')
 	else:
-		dataset_val = CSVDataset(train_file=parser.val_file, class_list=parser.classes_file,
+		dataset_val = CSVDataset(train_file=parser.val_file, class_list=parser.classes_file, noun_list=parser.noun_file,
 								 transform=transforms.Compose([Normalizer(), Resizer()]))
 
 	sampler = AspectRatioBasedSampler(dataset_train, batch_size=parser.batch_size, drop_last=True)
