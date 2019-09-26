@@ -237,6 +237,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.use_expert = False
 
         self.noun_classifier = ClassifyLocalFeatures(num_nouns)
+        #pdb.set_trace()
 
         #self.noun_attn = LearnableVector(num_classes)
 
