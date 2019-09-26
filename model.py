@@ -196,13 +196,16 @@ class LearnableVector(nn.Module):
 
 class ClassifyLocalFeatures(nn.Module):
     def __init__(self, vocab_size):
-        super(LearnableVector, self).__init__()
+        super(ClassifyLocalFeatures, self).__init__()
+        self.local_linear = nn.Linear(2048, 256)
         self.features_linear = nn.Linear(512, 256)
         self.act = nn.ReLU()
         self.vocab_linear = nn.Linear(256, vocab_size)
 
-    def forward(self, x):
-        out = self.features_linear(x)
+    def forward(self, local_features, rnn_features):
+        local = self.local_linear(local_features)
+        out = torch.cat((local, rnn_features), dim=1)
+        out = self.features_linear(out)
         out = self.act(out)
         return self.vocab_linear(out)
 
@@ -522,7 +525,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             else:
                 previous_location_features = self.get_local_visual_features(x4, bbox, bbox_exist < 0.5, batch_size)
 
-            noun_distribution = self.noun_classifier(torch.cat(previous_location_features, rnn_output), dim=1)
+            noun_distribution = self.noun_classifier(previous_location_features, rnn_output)
 
             if self.training:
                 gt = torch.zeros(batch_size, self.num_nouns).cuda(x.device)
