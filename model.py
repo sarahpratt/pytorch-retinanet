@@ -153,7 +153,7 @@ class ClassificationModel(nn.Module):
         new_x = torch.cat((x, spatial), dim=1)
 
 
-        out = self.conv1(x)
+        out = self.conv1(new_x)
         #out = self.bn1(out)
         out = self.act1(out)
         out = self.conv2(out)
