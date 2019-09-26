@@ -161,7 +161,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 	avg_reg_loss = 0.0
 	avg_bbox_loss = 0.0
 	avg_verb_loss = 0.0
-	avg_rnn_class_loss = 0.0
+	avg_noun_loss = 0.0
 	retinanet.training = True
 
 	deatch_resnet = parser.detach_epoch > epoch_num
@@ -201,7 +201,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		heights = data['heights'].cuda()
 		roles = role_tensor[verbs].cuda()
 
-		class_loss, reg_loss, verb_loss, bbox_loss = retinanet([image, annotations, verbs, widths, heights], roles,
+		class_loss, reg_loss, verb_loss, bbox_loss, noun_loss = retinanet([image, annotations, verbs, widths, heights], roles,
 															   deatch_resnet, use_gt_nouns)
 
 
@@ -209,7 +209,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		avg_reg_loss += reg_loss.mean().item()
 		avg_bbox_loss += bbox_loss.mean().item()
 		avg_verb_loss += verb_loss.mean().item()
-		#avg_rnn_class_loss += all_rnn_class_loss.mean().item()
+		avg_noun_loss += noun_loss.mean().item()
 
 		if i % 100 == 0:
 
@@ -225,11 +225,14 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 							  epoch_num * (len(dataloader_train)) + i)
 			writer.add_scalar("train/verb_loss", avg_verb_loss / 100,
 							  epoch_num * (len(dataloader_train)) + i)
+			writer.add_scalar("train/noun_loss", avg_noun_loss / 100,
+							  epoch_num * (len(dataloader_train)) + i)
 
 			avg_class_loss = 0.0
 			avg_reg_loss = 0.0
 			avg_bbox_loss = 0.0
 			avg_verb_loss = 0.0
+			avg_noun_loss = 0.0
 
 		if parser.just_verb_loss:
 			loss = verb_loss.mean()
@@ -244,7 +247,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		elif parser.weighted_verb_loss and not deatch_resnet:
 			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()*0.01
 		else:
-			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
+			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean() + noun_loss.mean()
 
 		if bool(loss == 0):
 			continue
@@ -266,8 +269,6 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 		k += 1
 		x = data['img'].cuda().float()
 		y = data['verb_idx'].cuda()
-		annotations = data['annot'].cuda().float()
-
 		widths = data['widths'].cuda()
 		heights = data['heights'].cuda()
 		roles = role_tensor[y].cuda()
@@ -279,10 +280,10 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 			nouns = []
 			bboxes = []
 			for j in range(6):
-				if dataset_train.idx_to_class[noun_predicts[j][i]] == 'nothing':
+				if dataset_train.idx_to_noun[noun_predicts[j][i]] == 'nothing':
 					nouns.append('')
 				else:
-					nouns.append(dataset_train.idx_to_class[noun_predicts[j][i]])
+					nouns.append(dataset_train.idx_to_noun[noun_predicts[j][i]])
 				if bbox_exists[j][i] > 0.5:
 					bboxes.append(bbox_predicts[j][i] / data['scale'][i])
 				else:
@@ -305,7 +306,7 @@ def create_model(parser, dataset_train):
 	elif parser.depth == 34:
 		retinanet = model.resnet34(num_classes=dataset_train.num_classes(), pretrained=True)
 	elif parser.depth == 50:
-		retinanet = model.resnet50(num_classes=dataset_train.num_classes(), pretrained=True)
+		retinanet = model.resnet50(num_classes=dataset_train.num_classes(), num_nouns=dataset_train.num_nouns(), pretrained=True)
 	elif parser.depth == 101:
 		retinanet = model.resnet101(num_classes=dataset_train.num_classes(), pretrained=True)
 	elif parser.depth == 152:

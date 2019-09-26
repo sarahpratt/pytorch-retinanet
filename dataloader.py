@@ -40,9 +40,9 @@ class CSVDataset(Dataset):
         # parse the provided class file
         try:
             with open(self.class_list, 'r') as file:
-                self.classes = self.load_classes(csv.reader(file, delimiter=','))
+                self.classes, self.idx_to_role = self.load_classes(csv.reader(file, delimiter=','))
             with open(self.noun_list, 'r') as file:
-                self.nouns = self.load_classes(csv.reader(file, delimiter=','))
+                self.nouns, self.idx_to_noun = self.load_classes(csv.reader(file, delimiter=','))
         except ValueError as e:
             #raise_from(ValueError('invalid CSV class file: {}: {}'.format(self.class_list, e)), None)
             ValueError('invalid CSV class file: {}: {}'.format(self.class_list, e))
@@ -108,6 +108,7 @@ class CSVDataset(Dataset):
 
     def load_classes(self, csv_reader):
         result = {}
+        id_to_name = []
         for line, row in enumerate(csv_reader):
             line += 1
 
@@ -121,7 +122,8 @@ class CSVDataset(Dataset):
             if class_name in result:
                 raise ValueError('line {}: duplicate class name: \'{}\''.format(line, class_name))
             result[class_name] = class_id
-        return result
+            id_to_name.append(class_name)
+        return result, id_to_name
 
 
     def __len__(self):
@@ -250,6 +252,9 @@ class CSVDataset(Dataset):
 
     def num_classes(self):
         return max(self.classes.values()) + 1
+
+    def num_nouns(self):
+        return max(self.nouns.values()) + 1
 
     def image_aspect_ratio(self, image_index):
         image = Image.open(self.image_names[image_index])

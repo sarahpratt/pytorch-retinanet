@@ -195,22 +195,26 @@ class LearnableVector(nn.Module):
 
 
 class ClassifyLocalFeatures(nn.Module):
-    def __init__(self):
+    def __init__(self, vocab_size):
         super(LearnableVector, self).__init__()
-
-
+        self.features_linear = nn.Linear(512, 256)
+        self.act = nn.ReLU()
+        self.vocab_linear = nn.Linear(256, vocab_size)
 
     def forward(self, x):
-        return self.weight * x
+        out = self.features_linear(x)
+        out = self.act(out)
+        return self.vocab_linear(out)
 
 
 class ResNet_RetinaNet_RNN(nn.Module):
 
-    def __init__(self, num_classes, block, layers, cat_features=False):
+    def __init__(self, num_classes, num_nouns, block, layers, cat_features=False):
         self.inplanes = 64
         super(ResNet_RetinaNet_RNN, self).__init__()
 
         self.num_classes = num_classes
+        self.num_nouns = num_nouns
 
         self._init_resnet(block, layers)
         self.fpn = PyramidFeatures(self.fpn_sizes[0], self.fpn_sizes[1], self.fpn_sizes[2])
@@ -229,6 +233,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
         self.use_expert = False
 
+        self.noun_classifier = ClassifyLocalFeatures(num_nouns)
 
         #self.noun_attn = LearnableVector(num_classes)
 
@@ -517,18 +522,16 @@ class ResNet_RetinaNet_RNN(nn.Module):
             else:
                 previous_location_features = self.get_local_visual_features(x4, bbox, bbox_exist < 0.5, batch_size)
 
+            noun_distribution = self.noun_classifier(torch.cat(previous_location_features, rnn_output), dim=1)
 
+            if self.training:
+                gt = torch.zeros(batch_size, self.num_nouns).cuda(x.device)
+                gt[torch.arange(batch_size), annotations[:, i, -1].long()] = 1
+                gt[torch.arange(batch_size), annotations[:, i, -2].long()] = 1
+                gt[torch.arange(batch_size), annotations[:, i, -3].long()] = 1
+                noun_loss += F.binary_cross_entropy_with_logits(noun_distribution, gt.float())
 
-
-            # if self.training:
-            #     gt = torch.zeros(batch_size, self.num_classes).cuda(x.device)
-            #     gt[torch.arange(batch_size), annotations[:, i, -1].long()] = 1
-            #     gt[torch.arange(batch_size), annotations[:, i, -2].long()] = 1
-            #     gt[torch.arange(batch_size), annotations[:, i, -3].long()] = 1
-            #     noun_loss += F.binary_cross_entropy_with_logits(noun_distribution, gt.float())
-
-
-
+            noun_guess = torch.argmax(noun_distribution, dim=1)
 
             prev_widths = torch.ceil(prev_widths * 10).long()
             prev_heights = torch.ceil(prev_heights * 10).long()
@@ -557,7 +560,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 bbox_pred_list.append(bbox_exist)
             else:
                 bbox_predicts.append(previous_boxes)
-                noun_predicts.append(classification_guess)
+                noun_predicts.append(noun_guess)
                 bbox_exist_list.append(bbox_exist)
 
         if self.training:
@@ -573,7 +576,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             all_reg_loss += reg_loss
             all_bbox_loss += bbox_loss
 
-            return all_class_loss, all_reg_loss, verb_loss, all_bbox_loss
+            return all_class_loss, all_reg_loss, verb_loss, all_bbox_loss, noun_loss
         else:
             if use_gt_verb:
                 return verb, noun_predicts, bbox_predicts, bbox_exist_list
@@ -602,13 +605,13 @@ def resnet34(num_classes, pretrained=False, **kwargs):
     return model
 
 
-def resnet50(num_classes, pretrained=False, **kwargs):
+def resnet50(num_classes, num_nouns, pretrained=False, **kwargs):
     """Constructs a ResNet-50 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
     #model = ResNet_RetinaNet_RNN(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs, cat_features=True)
-    model = ResNet_RetinaNet_RNN(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs)
+    model = ResNet_RetinaNet_RNN(num_classes, num_nouns, Bottleneck, [3, 4, 6, 3], **kwargs)
 
     if pretrained:
         state_dict = model_zoo.load_url(model_urls['resnet50'], model_dir='.')
