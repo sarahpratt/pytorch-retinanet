@@ -248,26 +248,19 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
         # init embeddings
         self.verb_embeding = nn.Embedding(504, 512)
-        self.noun_embedding = nn.Embedding(num_classes, 512)
+        self.noun_embedding = nn.Embedding(num_nouns, 512)
         self.bbox_width_embed = nn.Embedding(11, 16)
         self.bbox_height_embed = nn.Embedding(11, 16)
         self.bbox_x_embed = nn.Embedding(11, 16)
         self.bbox_y_embed = nn.Embedding(11, 16)
 
-        # init rnn and rnn weights
-        #self.rnn = nn.LSTMCell(2048 + 512 + 64 + 2048, 1024*2)
         self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
-        #self.rnn = nn.LSTMCell(2048 + 512, 1024*2)
-
 
         for name, param in self.rnn.named_parameters():
             if 'weight' in name:
                 nn.init.orthogonal_(param)
         self.rnn_linear = nn.Linear(1024*2, 256)
         self.noun_fc = nn.Linear(1024*2, num_classes)
-        #self.noun_dist = nn.Linear(1024*2, num_classes)
-
-
 
         # fill class/reg branches with weights
         prior = 0.01
@@ -460,9 +453,6 @@ class ResNet_RetinaNet_RNN(nn.Module):
             rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
-            #noun_attention = self.noun_fc(hx)
-            #noun_distribution = self.noun_fc(hx)
-
 
             just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
             rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
@@ -490,10 +480,6 @@ class ResNet_RetinaNet_RNN(nn.Module):
             class_boxes = classification[torch.arange(batch_size), best_bbox, :]
             classification_guess = torch.argmax(class_boxes, dim=1)
 
-            if self.training and use_gt_nouns:
-                previous_word = self.noun_embedding(annotations[:, i, -4].long())
-            else:
-                previous_word = self.noun_embedding(classification_guess)
 
             if self.training:
                 previous_boxes = annotations[:, i, :4]
@@ -535,6 +521,14 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 noun_loss += F.binary_cross_entropy_with_logits(noun_distribution, gt.float())
 
             noun_guess = torch.argmax(noun_distribution, dim=1)
+
+            if self.training and use_gt_nouns:
+                ground_truth_1 = self.noun_embedding(annotations[:, i, -1].long())
+                ground_truth_2 = self.noun_embedding(annotations[:, i, -2].long())
+                ground_truth_3 = self.noun_embedding(annotations[:, i, -3].long())
+                previous_word = torch.stack([ground_truth_1, ground_truth_2, ground_truth_3]).mean(dim=0)
+            else:
+                previous_word = self.noun_embedding(noun_guess)
 
             prev_widths = torch.ceil(prev_widths * 10).long()
             prev_heights = torch.ceil(prev_heights * 10).long()
