@@ -180,7 +180,7 @@ class ClassificationModel(nn.Module):
         #nouns = F.softmax(nouns.view(x.shape[0], 1, self.num_classes), dim=2)
         #return F.softmax(out2.contiguous().view(x.shape[0], -1, self.num_classes), dim=2)*nouns, bbox_exists
         #return out2.contiguous().view(x.shape[0], -1, self.num_classes), bbox_exists
-        return out2.contiguous().view(new_x.shape[0], -1, self.num_classes), bbox_exists
+        return out2.contiguous().view(x.shape[0], -1, self.num_classes), bbox_exists
 
 
 class LearnableVector(nn.Module):
@@ -369,10 +369,10 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
     def forward(self, inputs,roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
 
-        # if self.training:
-        #     img_batch, annotations, verb, widths, heights = inputs
-        # else:
-        img_batch, annotations, verb, widths, heights = inputs
+        if self.training:
+            img_batch, annotations, verb, widths, heights = inputs
+        else:
+            img_batch, verb, widths, heights = inputs
 
         batch_size = img_batch.shape[0]
 
@@ -513,7 +513,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             else:
                 previous_word = self.noun_embedding(classification_guess)
 
-            if self.training or i == 0:
+            if self.training:
                 previous_boxes = annotations[:, i, :4]
             else:
                 transformed_anchors = self.regressBoxes(anchors, regression)

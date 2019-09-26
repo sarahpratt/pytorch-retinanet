@@ -67,13 +67,12 @@ class BboxEval:
 
 
     def update_third_box(self, pred_box, gt_box):
-        if gt_box != None:
+        if gt_box is not None:
             smaller_gt_width  = (gt_box[2] - gt_box[0])*0.05
             smaller_gt_length = (gt_box[3] - gt_box[1])*0.05
-            adjusted = [gt_box[0] + smaller_gt_width, gt_box[1] + smaller_gt_length, gt_box[2] - smaller_gt_width, gt_box[3] - smaller_gt_length]
-        else:
-            adjusted = None
-        if self.bb_intersection_over_union(pred_box, adjusted):
+            gt_box = [gt_box[0] + smaller_gt_width, gt_box[1] + smaller_gt_length, gt_box[2] - smaller_gt_width, gt_box[3] - smaller_gt_length]
+            gt_box = [2.0*g for g in gt_box]
+        if self.bb_intersection_over_union(pred_box, gt_box):
             self.correct_third_boxes += 1.0
 
 
@@ -105,7 +104,7 @@ class BboxEval:
 
         if len(order) >= 3:
             self.all_third_boxes += 1.0
-            self.update_third_box(pred_bboxes[2], gt_bboxes[0])
+            self.update_third_box(pred_bboxes[2], pred_bboxes[0])
 
         if len(pred_nouns) == 0:
             pdb.set_trace()
