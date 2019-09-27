@@ -53,7 +53,7 @@ def main(args=None):
 	parser.add_argument("--rnn-class", action="store_true", default=False)
 	parser.add_argument("--load-coco-weights", action="store_true", default=False)
 	parser.add_argument("--just-verb-loss", action="store_true", default=False)
-	parser.add_argument("--no-rnn-loss", action="store_true", default=False)
+	parser.add_argument("--no-noun-loss", action="store_true", default=False)
 	parser.add_argument("--no-verb-loss", action="store_true", default=False)
 	parser.add_argument("--weighted-verb-loss", action="store_true", default=False)
 	parser.add_argument("--just-class-loss", action="store_true", default=False)
@@ -242,7 +242,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 			loss = class_loss.mean()
 		elif parser.retina_loss:
 			loss = class_loss.mean() + reg_loss.mean()
-		elif parser.no_rnn_loss:
+		elif parser.no_noun_loss:
 			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()
 		elif parser.weighted_verb_loss and not deatch_resnet:
 			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean() + verb_loss.mean()*0.01
@@ -297,6 +297,8 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 	writer.add_scalar("val/value_bbox", evaluator.value_bbox(), epoch_num)
 	writer.add_scalar("val/value_all_bbox", evaluator.value_all_bbox(), epoch_num)
 	writer.add_scalar("val/third_box", evaluator.third_box(), epoch_num)
+	writer.add_scalar("val/third_box", evaluator.just_bbox(), epoch_num)
+
 
 
 

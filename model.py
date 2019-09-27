@@ -198,13 +198,15 @@ class ClassifyLocalFeatures(nn.Module):
     def __init__(self, vocab_size):
         super(ClassifyLocalFeatures, self).__init__()
         self.local_linear = nn.Linear(2048, 256)
+        self.hidden_linear = nn.Linear(2048, 256)
         self.features_linear = nn.Linear(512, 256)
         self.act = nn.ReLU()
         self.vocab_linear = nn.Linear(256, vocab_size)
 
     def forward(self, local_features, rnn_features):
         local = self.local_linear(local_features)
-        out = torch.cat((local, rnn_features), dim=1)
+        hidden = self.hidden_linear(rnn_features)
+        out = torch.cat((local, hidden), dim=1)
         out = self.features_linear(out)
         out = self.act(out)
         return self.vocab_linear(out)
@@ -250,12 +252,14 @@ class ResNet_RetinaNet_RNN(nn.Module):
         # init embeddings
         self.verb_embeding = nn.Embedding(504, 512)
         self.noun_embedding = nn.Embedding(num_nouns, 512)
+        self.role_embedding = nn.Embedding(num_classes, 256)
+
         self.bbox_width_embed = nn.Embedding(11, 16)
         self.bbox_height_embed = nn.Embedding(11, 16)
         self.bbox_x_embed = nn.Embedding(11, 16)
         self.bbox_y_embed = nn.Embedding(11, 16)
 
-        self.rnn = nn.LSTMCell(2048 + 512 + 64, 1024*2)
+        self.rnn = nn.LSTMCell(2048 + 512 + 256 + 64, 1024*2)
 
         for name, param in self.rnn.named_parameters():
             if 'weight' in name:
@@ -429,7 +433,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
         # init LSTM inputs
         hx, cx = torch.zeros(batch_size, 1024*2).cuda(x.device), torch.zeros(batch_size, 1024*2).cuda(x.device)
         previous_box_embed = torch.zeros(batch_size, 64).cuda(x.device)
-        bbox = torch.zeros(batch_size, 4).cuda(x.device)
+        previous_role = torch.zeros(batch_size, 256).cuda(x.device)
 
 
         # init losses
@@ -451,7 +455,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
         previous_location_features = torch.zeros(batch_size, 2048).cuda(x.device)
 
         for i in range(6):
-            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
+            rnn_input = torch.cat((image_predict, previous_word, previous_role, previous_box_embed), dim=1)
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
 
@@ -479,7 +483,13 @@ class ResNet_RetinaNet_RNN(nn.Module):
             best_per_box = torch.max(classification, dim=2)[0]
             best_bbox = torch.argmax(best_per_box, dim=1)
             class_boxes = classification[torch.arange(batch_size), best_bbox, :]
-            classification_guess = torch.argmax(class_boxes, dim=1)
+            role_guess = torch.argmax(class_boxes, dim=1)
+
+
+            if self.training:
+                previous_role = self.role_embedding(annotations[:, i, :5])
+            else:
+                previous_role = self.role_embedding(role_guess)
 
 
             if self.training:
@@ -512,7 +522,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             else:
                 previous_location_features = self.get_local_visual_features(x4, bbox, bbox_exist < 0.5, batch_size)
 
-            noun_distribution = self.noun_classifier(previous_location_features, rnn_output)
+            noun_distribution = self.noun_classifier(previous_location_features, hx)
 
             if self.training:
                 gt = torch.zeros(batch_size, self.num_nouns).cuda(x.device)
