@@ -137,7 +137,7 @@ class ClassificationModel(nn.Module):
         self.output_retina = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
         self.output_act_retina = nn.Sigmoid()
         self.max_dims = [18, 9, 5, 3]
-        self.offset = [0, 18**2, 18**2 + 9**2, 18**2 + 9**2 + 5**2]
+        self.offset = [0, 18**2, 18**2 + 9**2 - 1, 18**2 + 9**2 + 5**2 - 2]
 
     def forward(self, x, noun_dist, feature_pyramid_level):
 
@@ -493,10 +493,9 @@ class ResNet_RetinaNet_RNN(nn.Module):
                     if torch.isnan(location_embeddings[iii]).any():
                         pdb.set_trace()
             else:
-                best_bbox_embed = best_bbox.clone()
+                best_bbox_embed = grid_indices[torch.arange(batch_size), best_bbox]
                 best_bbox_embed[bbox_exist < 0.5] = self.max_spatial_dims - 1
                 location_embeddings = self.location_embedding(best_bbox_embed)
-
 
 
             if self.training:
