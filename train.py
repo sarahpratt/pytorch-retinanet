@@ -268,9 +268,6 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 	retinanet.eval()
 	k = 0
 	for iter_num, data in enumerate(dataloader_val):
-
-		print(k)
-
 		if k % 100 == 0:
 			print(str(k) + " out of " + str(len(dataset_val) / parser.batch_size))
 		k += 1
