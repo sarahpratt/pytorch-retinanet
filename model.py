@@ -9,6 +9,7 @@ import losses
 # from lib.nms.pth_nms import pth_nms
 import torch.nn.functional as F
 import pdb
+import numpy as np
 
 
 # def nms(dets, thresh):
@@ -118,7 +119,7 @@ class ClassificationModel(nn.Module):
         self.bbox_conv = nn.Conv2d(4, 64, kernel_size=1)
         self.mask_conv = nn.Conv2d(1, 64, kernel_size=1)
 
-        self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(num_features_in + 64, feature_size, kernel_size=3, padding=1)
         #self.bn1 = nn.BatchNorm2d(feature_size)
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
@@ -144,16 +145,17 @@ class ClassificationModel(nn.Module):
 
         dimention = self.max_dims[feature_pyramid_level]
 
-        grid = torch.arange(dimention * dimention)
+        grid = torch.arange(dimention * dimention).cuda()
         grid = grid + self.offset[feature_pyramid_level]
+        grid_embed = self.location_embedding(grid).view(-1, dimention, dimention)[:, :width, :height].cuda()
         grid = grid.view(dimention, dimention)[:width, :height].cuda()
-        #grid_embedded = self.location_embedding(grid, dim=[0,1])
-
         grid_list = grid[:width, :height].view(1, width, height, 1).expand(batch_size, width, height, 9).contiguous().view(batch_size, -1)
 
-        #new_x = torch.cat((x, spatial), dim=1)
+        grid_embed = grid_embed.expand(batch_size, grid_embed.shape[0], grid_embed.shape[1], grid_embed.shape[2])
 
-        out = self.conv1(x)
+        new_x = torch.cat((x, grid_embed), dim=1)
+
+        out = self.conv1(new_x)
         out = self.act1(out)
         out = self.conv2(out)
         out = self.act2(out)
@@ -212,7 +214,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
         # init embeddings
         self.verb_embeding = nn.Embedding(504, 512)
         self.noun_embedding = nn.Embedding(num_classes, 512)
-        self.location_embedding = nn.Embedding(18**2 + 9**2 + 5**2 + 3**2 + 1, 16)
+        self.max_spatial_dims = 18**2 + 9**2 + 5**2 + 3**2 + 1
+        self.location_embedding = nn.Embedding(18**2 + 9**2 + 5**2 + 3**2 + 1, 64)
         self.anchorbox_embedding = nn.Embedding(9, 16)
 
         self.regressionModel = RegressionModel(768)
@@ -353,14 +356,10 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
     def forward(self, inputs, roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
 
-
         if self.training:
             img_batch, annotations, verb, widths, heights = inputs
         else:
             img_batch, verb, widths, heights = inputs
-
-        pdb.set_trace()
-
 
         batch_size = img_batch.shape[0]
 
@@ -397,12 +396,11 @@ class ResNet_RetinaNet_RNN(nn.Module):
         # Get feature pyramid
         features = self.fpn([x2, x3, x4])
         anchors = self.anchors(img_batch)
-        pdb.set_trace()
         features.pop(0)  # SARAH - remove feature batch
 
         # init LSTM inputs
         hx, cx = torch.zeros(batch_size, 1024*2).cuda(x.device), torch.zeros(batch_size, 1024*2).cuda(x.device)
-        previous_box_embed = torch.zeros(batch_size, 64).cuda(x.device)
+        location_embeddings = torch.zeros(batch_size, 64).cuda(x.device)
         bbox = torch.zeros(batch_size, 4).cuda(x.device)
 
         # init losses
@@ -424,7 +422,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
         previous_location_features = torch.zeros(batch_size, 2048).cuda(x.device)
 
         for i in range(6):
-            rnn_input = torch.cat((image_predict, previous_word, previous_box_embed), dim=1)
+            rnn_input = torch.cat((image_predict, previous_word, location_embeddings), dim=1)
 
             hx, cx = self.rnn(rnn_input, (hx, cx))
             rnn_output = self.rnn_linear(hx)
@@ -472,8 +470,6 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 classification_guess = torch.argmax(noun_distribution[:, :-2], dim=1)
                 best_bbox = torch.argmax(classification[torch.arange(batch_size), :, classification_guess.long()], dim=1)
 
-            pdb.set_trace()
-
             if self.training and use_gt_nouns:
                 ground_truth_1 = self.noun_embedding(annotations[:, i, -1].long())
                 ground_truth_2 = self.noun_embedding(annotations[:, i, -2].long())
@@ -484,21 +480,22 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
 
             if self.training:
-                IoU = self.calc_iou(anchors[0, :, :], annotations[:, 0, :4]).transpose(0,1)
+                IoU = self.calc_iou(anchors[0, :, :], annotations[:, i, :4]).transpose(0,1).cuda()
                 IoU2 = IoU > 0.5
+                location_embeddings = torch.zeros(batch_size, 64).cuda()
                 for iii in range(batch_size):
-                    inds = grid_indices[iii][IoU2[iii]]
-
-
-                pdb.set_trace()
+                    if annotations[iii, i, 0] == -1 or not IoU2[iii].any():
+                        location_embeddings[iii] = self.location_embedding(torch.tensor(self.max_spatial_dims - 1).view(1, -1).cuda().long())
+                    else:
+                        inds = grid_indices[iii][IoU2[iii]]
+                        embedding = self.location_embedding(inds).mean(dim=0)
+                        location_embeddings[iii] = embedding
+                    if torch.isnan(location_embeddings[iii]).any():
+                        pdb.set_trace()
             else:
-                best_bbox
-
-
-            if self.training:
-                bbox[previous_boxes[:, 0] == -1] = -1.0
-            else:
-                bbox[bbox_exist < 0.5] = -1.0
+                best_bbox_embed = best_bbox.clone()
+                best_bbox_embed[bbox_exist < 0.5] = self.max_spatial_dims - 1
+                location_embeddings = self.location_embedding(best_bbox_embed)
 
 
 
@@ -514,6 +511,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 bbox_predicts.append(previous_boxes)
                 noun_predicts.append(classification_guess)
                 bbox_exist_list.append(bbox_exist)
+
 
         if self.training:
             anns = annotations[:, :, :].unsqueeze(1)
