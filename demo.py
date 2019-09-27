@@ -9,6 +9,7 @@ import pdb
 import pandas as pd
 import numpy as np
 from collections import defaultdict
+import copy
 
 import torch
 from torchvision import datasets, models, transforms
@@ -101,7 +102,8 @@ def load_baselines():
 
 
 evaluator = BboxEval()
-dataset_val, dev_gt, verb_orders, all_idx_to_english, nouns_set = load_jsons()
+#dataset_val, dev_gt, verb_orders, all_idx_to_english, nouns_set = load_jsons()
+dataset_val, dev_gt, verb_orders, all_idx_to_english, nouns_set = (copy.deepcopy(load_jsons()))
 retinanet = load_model(dataset_val)
 retinanet.training = False
 retinanet.eval()
