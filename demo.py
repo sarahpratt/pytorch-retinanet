@@ -18,33 +18,25 @@ from dataloader import CSVDataset, collater, Resizer, AspectRatioBasedSampler, A
 from PIL import Image
 import random
 
-val_file = './annotations/top_80_lstm/test_anns.csv'
-classes_file = './annotations/top_80_lstm/classes_80.csv'
 
-
-@st.cache
+@st.cache(ignore_hash=True)
 def load_jsons():
+    val_file = './annotations/top_80_lstm/test_anns.csv'
+    classes_file = './annotations/top_80_lstm/classes_80.csv'
     dataset_val = CSVDataset(train_file=val_file, class_list=classes_file, transform=transforms.Compose([Normalizer(), Resizer()]))
-    print("loading dev")
-
     with open('./dev.json') as f:
         dev_gt = json.load(f)
-    print("loading imsitu_dpace")
-
     with open('./imsitu_space.json') as f:
         all = json.load(f)
         verb_orders = all['verbs']
         all_idx_to_english = all['nouns']
-
     nouns_set = set()
     for noun in dataset_val.classes:
         if noun != "oov":
             nouns_set.add(noun.split('_')[0])
-
-
     return dataset_val, dev_gt, verb_orders, all_idx_to_english, nouns_set
 
-
+@st.cache(ignore_hash=True)
 def load_model(dataset_val):
     retinanet = model.resnet50(num_classes=dataset_val.num_classes(), pretrained=True)
     retinanet = retinanet.cuda()
@@ -81,7 +73,7 @@ def get_color(evaluator, boxes, gt_box, nouns, gt_nouns):
     return (255, 15, 119)
 
 
-@st.cache
+@st.cache(ignore_hash=True)
 def categorize_ims_by_verb(dataset_val):
     verb_categorizations = defaultdict(list)
     i = 0
@@ -92,7 +84,7 @@ def categorize_ims_by_verb(dataset_val):
     return verb_categorizations
 
 
-@st.cache
+@st.cache(ignore_hash=True)
 def load_baselines():
     with open('./baseline_files/gt_baseline_fixed.json') as f:
         gt = json.load(f)
@@ -103,8 +95,8 @@ def load_baselines():
 
 evaluator = BboxEval()
 #dataset_val, dev_gt, verb_orders, all_idx_to_english, nouns_set = load_jsons()
-dataset_val, dev_gt, verb_orders, all_idx_to_english, nouns_set = (copy.deepcopy(load_jsons()))
-retinanet = load_model(dataset_val)
+dataset_val, dev_gt, verb_orders, all_idx_to_english, nouns_set = copy.deepcopy(load_jsons())
+retinanet = copy.deepcopy(load_model(dataset_val))
 retinanet.training = False
 retinanet.eval()
 verb_categorizations = categorize_ims_by_verb(dataset_val)
