@@ -55,6 +55,7 @@ def main(args=None):
 	parser.add_argument("--just-verb-loss", action="store_true", default=False)
 	parser.add_argument("--no-noun-loss", action="store_true", default=False)
 	parser.add_argument("--no-verb-loss", action="store_true", default=False)
+	parser.add_argument("--just-noun-loss", action="store_true", default=False)
 	parser.add_argument("--weighted-verb-loss", action="store_true", default=False)
 	parser.add_argument("--just-class-loss", action="store_true", default=False)
 	parser.add_argument("--retina-loss", action="store_true", default=False)
@@ -116,9 +117,9 @@ def main(args=None):
 		retinanet.module.load_state_dict(x)
 
 	#load_old_weights(retinanet, './retinanet_50.pth')
-	# x = torch.load('./retinanet_0.pth')
-	# retinanet.module.load_state_dict(x['state_dict'])
-	# optimizer.load_state_dict(x['optimizer'])
+	x = torch.load('./retinanet_8.pth')
+	retinanet.module.load_state_dict(x['state_dict'])
+	optimizer.load_state_dict(x['optimizer'])
 	# for param_group in optimizer.param_groups:
 	# 	param_group["lr"] = 0.00001
 
@@ -236,6 +237,8 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 
 		if parser.just_verb_loss:
 			loss = verb_loss.mean()
+		elif parser.just_noun_loss:
+			loss = noun_loss.mean()
 		elif parser.no_verb_loss:
 			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean()
 		elif parser.just_class_loss:
@@ -297,7 +300,7 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 	writer.add_scalar("val/value_bbox", evaluator.value_bbox(), epoch_num)
 	writer.add_scalar("val/value_all_bbox", evaluator.value_all_bbox(), epoch_num)
 	writer.add_scalar("val/third_box", evaluator.third_box(), epoch_num)
-	writer.add_scalar("val/third_box", evaluator.just_bbox(), epoch_num)
+	writer.add_scalar("val/just_box", evaluator.just_bbox(), epoch_num)
 
 
 

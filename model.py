@@ -487,7 +487,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
 
             if self.training:
-                previous_role = self.role_embedding(annotations[:, i, :5])
+                previous_role = self.role_embedding(annotations[:, i, 4].long())
             else:
                 previous_role = self.role_embedding(role_guess)
 
