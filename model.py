@@ -79,10 +79,12 @@ class PyramidFeatures(nn.Module):
 
 
 class RegressionModel(nn.Module):
-    def __init__(self, num_features_in, num_anchors=9, feature_size=256):
+    def __init__(self, num_features_in, location_embedding, num_anchors=9, feature_size=256):
         super(RegressionModel, self).__init__()
+        self.location_embedding = location_embedding
 
-        self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
+
+        self.conv1 = nn.Conv2d(num_features_in + 64, feature_size, kernel_size=3, padding=1)
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act2 = nn.ReLU()
@@ -91,12 +93,23 @@ class RegressionModel(nn.Module):
         self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act4 = nn.ReLU()
         self.output = nn.Conv2d(feature_size, num_anchors * 4, kernel_size=3, padding=1)
+        self.max_dims = [18, 9, 5, 3]
+        self.offset = [0, 18 ** 2, 18 ** 2 + 9 ** 2 - 1, 18 ** 2 + 9 ** 2 + 5 ** 2 - 2]
 
-    def forward(self, x):
+    def forward(self, x, feature_pyramid_level):
         batch_size, channels, width, height = x.shape
 
+        dimention = self.max_dims[feature_pyramid_level]
 
-        out = self.conv1(x)
+        grid = torch.arange(dimention * dimention).cuda()
+        grid = grid + self.offset[feature_pyramid_level]
+        grid_embed = self.location_embedding(grid).view(-1, dimention, dimention)[:, :width, :height].cuda()
+
+        grid_embed = grid_embed.expand(batch_size, grid_embed.shape[0], grid_embed.shape[1], grid_embed.shape[2])
+
+        new_x = torch.cat((x, grid_embed), dim=1)
+
+        out = self.conv1(new_x)
         out = self.act1(out)
         out = self.conv2(out)
         out = self.act2(out)
@@ -218,12 +231,12 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.verb_embeding = nn.Embedding(504, 512)
         self.noun_embedding = nn.Embedding(num_classes, 512)
         self.max_spatial_dims = 18**2 + 9**2 + 5**2 + 3**2 + 1
-        self.location_embedding = nn.Embedding(18**2 + 9**2 + 5**2 + 3**2 + 1, 64)
+        self.location_embedding = nn.Embedding(self.max_spatial_dims, 64)
         self.anchorbox_embedding = nn.Embedding(9, 16)
         self.height_emb = nn.Embedding(10, 16)
         self.width_emb = nn.Embedding(10, 16)
 
-        self.regressionModel = RegressionModel(768)
+        self.regressionModel = RegressionModel(768, self.location_embedding)
         self.classificationModel = ClassificationModel(768, self.location_embedding, num_classes=num_classes)
 
 
@@ -450,7 +463,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
             rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
 
 
-            regression = torch.cat([self.regressionModel(rnn_and_features) for rnn_and_features in rnn_feature_shapes], dim=1)
+            regression = torch.cat([self.regressionModel(rnn_feature_shapes[ii], ii) for ii in range(len(rnn_feature_shapes))], dim=1)
 
             classifications = []
             bbox_exist = []

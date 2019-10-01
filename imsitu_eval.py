@@ -102,7 +102,7 @@ class BboxEval:
         self.per_verb_just_bboxes[gt_verb] += len(order)
 
 
-        if len(order) >= 3:
+        if len(order) >= 3 and pred_bboxes[2] is not None and pred_bboxes[2] is not None:
             self.all_third_boxes += 1.0
             self.update_third_box(pred_bboxes[2], pred_bboxes[0])
 
