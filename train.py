@@ -199,6 +199,9 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		annotations[:, 2, 1] = annotations[:, 0, 1] + fifth_of_width
 		annotations[:, 2, 3] = annotations[:, 0, 3] - fifth_of_width
 
+		annotations[:, 2, 4] = annotations[:, 0, 4]
+		annotations[:, 2, 5] = annotations[:, 0, 5]
+		annotations[:, 2, 6] = annotations[:, 0, 6]
 
 		#pdb.set_trace()
 		verbs = data['verb_idx'].cuda()
