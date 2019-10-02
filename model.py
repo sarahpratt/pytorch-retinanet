@@ -84,7 +84,7 @@ class RegressionModel(nn.Module):
         self.location_embedding = location_embedding
 
 
-        self.conv1 = nn.Conv2d(num_features_in + 64, feature_size, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(num_features_in + 4, feature_size, kernel_size=3, padding=1)
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act2 = nn.ReLU()
@@ -135,7 +135,7 @@ class ClassificationModel(nn.Module):
         self.bbox_conv = nn.Conv2d(4, 64, kernel_size=1)
         self.mask_conv = nn.Conv2d(1, 64, kernel_size=1)
 
-        self.conv1 = nn.Conv2d(num_features_in + 64, feature_size, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(num_features_in + 4, feature_size, kernel_size=3, padding=1)
         #self.bn1 = nn.BatchNorm2d(feature_size)
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
@@ -231,10 +231,10 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.verb_embeding = nn.Embedding(504, 512)
         self.noun_embedding = nn.Embedding(num_classes, 512)
         self.max_spatial_dims = 18**2 + 9**2 + 5**2 + 3**2 + 1
-        self.location_embedding = nn.Embedding(self.max_spatial_dims, 64)
+        self.location_embedding = nn.Embedding(self.max_spatial_dims, 4)
         self.anchorbox_embedding = nn.Embedding(9, 16)
-        self.height_emb = nn.Embedding(10, 16)
-        self.width_emb = nn.Embedding(10, 16)
+        self.height_emb = nn.Embedding(10, 4)
+        self.width_emb = nn.Embedding(10, 4)
 
         self.regressionModel = RegressionModel(768, self.location_embedding)
         self.classificationModel = ClassificationModel(768, self.location_embedding, num_classes=num_classes)
@@ -242,7 +242,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
         # init rnn and rnn weights
         #self.rnn = nn.LSTMCell(2048 + 512 + 64 + 2048, 1024*2)
-        self.rnn = nn.LSTMCell(2048 + 512 + 64 + 32, 1024*2)
+        self.rnn = nn.LSTMCell(2048 + 512 + 4 + 4 + 4, 1024*2)
         #self.rnn = nn.LSTMCell(2048 + 512, 1024*2)
 
 
@@ -418,11 +418,11 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
         # init LSTM inputs
         hx, cx = torch.zeros(batch_size, 1024*2).cuda(x.device), torch.zeros(batch_size, 1024*2).cuda(x.device)
-        location_embeddings = torch.zeros(batch_size, 64).cuda(x.device)
+        location_embeddings = torch.zeros(batch_size, 4).cuda(x.device)
         bbox = torch.zeros(batch_size, 4).cuda(x.device)
 
-        prev_height = torch.zeros(batch_size, 16).cuda(x.device)
-        prev_width = torch.zeros(batch_size, 16).cuda(x.device)
+        prev_height = torch.zeros(batch_size, 4).cuda(x.device)
+        prev_width = torch.zeros(batch_size, 4).cuda(x.device)
 
 
         # init losses
@@ -509,7 +509,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
                 IoU = self.calc_iou(anchors[0, :, :], annotations[:, i, :4]).transpose(0,1).cuda()
                 IoU2 = IoU > 0.5
-                location_embeddings = torch.zeros(batch_size, 64).cuda()
+                location_embeddings = torch.zeros(batch_size, 4).cuda()
                 for iii in range(batch_size):
                     if annotations[iii, i, 0] == -1 or not IoU2[iii].any():
                         location_embeddings[iii] = self.location_embedding(torch.tensor(self.max_spatial_dims - 1).view(1, -1).cuda().long())
