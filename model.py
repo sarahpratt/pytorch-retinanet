@@ -457,70 +457,91 @@ class ResNet_RetinaNet_RNN(nn.Module):
         for i in range(6):
             rnn_input = torch.cat((image_predict, previous_word, previous_role, previous_box_embed), dim=1)
             hx, cx = self.rnn(rnn_input, (hx, cx))
-            rnn_output = self.rnn_linear(hx)
 
-            just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
-            rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
-            rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
+            with torch.no_grad():
+                rnn_output = self.rnn_linear(hx)
+                just_rnn = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) for feature in features]
+                rnn_feature_mult = [rnn_output.view(batch_size, 256, 1, 1).expand(feature.shape) * feature for feature in features]
+                rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
 
-            regression = torch.cat([self.regressionModel(rnn_and_features) for rnn_and_features in rnn_feature_shapes], dim=1)
-            classifications = []
-            bbox_exist = []
+                regression = torch.cat([self.regressionModel(rnn_and_features) for rnn_and_features in rnn_feature_shapes], dim=1)
+                classifications = []
+                bbox_exist = []
 
-            for ii in range(len(rnn_feature_shapes)):
-                classication = self.classificationModel(rnn_feature_shapes[ii])
-                bbox_exist.append(classication[1])
-                classifications.append(classication[0])
+                for ii in range(len(rnn_feature_shapes)):
+                    classication = self.classificationModel(rnn_feature_shapes[ii])
+                    bbox_exist.append(classication[1])
+                    classifications.append(classication[0])
 
-            if len(bbox_exist[0].shape) == 1:
-                bbox_exist = [c.unsqueeze(0) for c in bbox_exist]
+                if len(bbox_exist[0].shape) == 1:
+                    bbox_exist = [c.unsqueeze(0) for c in bbox_exist]
 
-            bbox_exist = torch.cat([c for c in bbox_exist], dim=1)
-            bbox_exist = torch.max(bbox_exist, dim=1)[0]
+                bbox_exist = torch.cat([c for c in bbox_exist], dim=1)
+                bbox_exist = torch.max(bbox_exist, dim=1)[0]
 
-            # get max from K x A x W x H to get max classificiation and bbox
-            classification = torch.cat([c for c in classifications], dim=1)
-            best_per_box = torch.max(classification, dim=2)[0]
-            best_bbox = torch.argmax(best_per_box, dim=1)
-            class_boxes = classification[torch.arange(batch_size), best_bbox, :]
-            role_guess = torch.argmax(class_boxes, dim=1)
+                # get max from K x A x W x H to get max classificiation and bbox
+                classification = torch.cat([c for c in classifications], dim=1)
+                best_per_box = torch.max(classification, dim=2)[0]
+                best_bbox = torch.argmax(best_per_box, dim=1)
+                class_boxes = classification[torch.arange(batch_size), best_bbox, :]
+                role_guess = torch.argmax(class_boxes, dim=1)
+
+                if self.training:
+                    previous_role = self.role_embedding(annotations[:, i, 4].long())
+                else:
+                    previous_role = self.role_embedding(role_guess)
 
 
-            if self.training:
-                previous_role = self.role_embedding(annotations[:, i, 4].long())
-            else:
-                previous_role = self.role_embedding(role_guess)
+                if self.training:
+                    previous_boxes = annotations[:, i, :4]
+                else:
+                    transformed_anchors = self.regressBoxes(anchors, regression)
+                    transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
+                    previous_boxes = transformed_anchors[torch.arange(batch_size), best_bbox, :]
 
+                prev_heights = (previous_boxes[:, 2] - previous_boxes[:, 0]) / img_batch.shape[3]
+                prev_widths = (previous_boxes[:, 3] - previous_boxes[:, 1]) / img_batch.shape[2]
+                prev_ctr_y = previous_boxes[:, 0] / img_batch.shape[3] + 0.5 * prev_heights
+                prev_ctr_x = previous_boxes[:, 1] / img_batch.shape[2] + 0.5 * prev_widths
 
-            if self.training:
-                previous_boxes = annotations[:, i, :4]
-            else:
-                transformed_anchors = self.regressBoxes(anchors, regression)
-                transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
-                previous_boxes = transformed_anchors[torch.arange(batch_size), best_bbox, :]
+                perc_start_x = previous_boxes[:, 1] / img_batch.shape[2]
+                perc_end_x = previous_boxes[:, 3] / img_batch.shape[2]
+                perc_start_y = previous_boxes[:, 0] / img_batch.shape[3]
+                perc_end_y = previous_boxes[:, 2] / img_batch.shape[3]
 
-            prev_heights = (previous_boxes[:, 2] - previous_boxes[:, 0]) / img_batch.shape[3]
-            prev_widths = (previous_boxes[:, 3] - previous_boxes[:, 1]) / img_batch.shape[2]
-            prev_ctr_y = previous_boxes[:, 0] / img_batch.shape[3] + 0.5 * prev_heights
-            prev_ctr_x = previous_boxes[:, 1] / img_batch.shape[2] + 0.5 * prev_widths
+                bbox = torch.stack([perc_start_x, perc_end_x, perc_start_y, perc_end_y], dim=1)
 
-            perc_start_x = previous_boxes[:, 1] / img_batch.shape[2]
-            perc_end_x = previous_boxes[:, 3] / img_batch.shape[2]
-            perc_start_y = previous_boxes[:, 0] / img_batch.shape[3]
-            perc_end_y = previous_boxes[:, 2] / img_batch.shape[3]
+                if self.training:
+                    bbox[previous_boxes[:, 0] == -1] = -1.0
+                else:
+                    bbox[bbox_exist < 0.5] = -1.0
 
-            bbox = torch.stack([perc_start_x, perc_end_x, perc_start_y, perc_end_y], dim=1)
+                if self.training:
+                    previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1,
+                                                                                batch_size)
+                else:
+                    previous_location_features = self.get_local_visual_features(x4, bbox, bbox_exist < 0.5, batch_size)
 
-            if self.training:
-                bbox[previous_boxes[:, 0] == -1] = -1.0
-            else:
-                bbox[bbox_exist < 0.5] = -1.0
+                prev_widths = torch.ceil(prev_widths * 10).long()
+                prev_heights = torch.ceil(prev_heights * 10).long()
+                prev_ctr_x = torch.ceil(prev_ctr_x * 10).long()
+                prev_ctr_y = torch.ceil(prev_ctr_y * 10).long()
 
-            if self.training:
-                previous_location_features = self.get_local_visual_features(x4, bbox, previous_boxes[:, 0] == -1,
-                                                                            batch_size)
-            else:
-                previous_location_features = self.get_local_visual_features(x4, bbox, bbox_exist < 0.5, batch_size)
+                prev_widths = torch.clamp(prev_widths, 0, 10)
+                prev_heights = torch.clamp(prev_heights, 0, 10)
+                prev_ctr_x = torch.clamp(prev_ctr_x, 0, 10)
+                prev_ctr_y = torch.clamp(prev_ctr_y, 0, 10)
+
+                if not self.training:
+                    bbox_exist = torch.sigmoid(bbox_exist)
+                    prev_widths[bbox_exist < 0.5] = 0
+                    prev_heights[bbox_exist < 0.5] = 0
+                    prev_ctr_x[bbox_exist < 0.5] = 0
+                    prev_ctr_y[bbox_exist < 0.5] = 0
+
+                previous_box_embed = torch.cat(
+                    [self.bbox_width_embed(prev_widths), self.bbox_height_embed(prev_heights),
+                     self.bbox_x_embed(prev_ctr_x), self.bbox_y_embed(prev_ctr_y)], dim=1)
 
             noun_distribution = self.noun_classifier(previous_location_features, hx)
 
@@ -540,27 +561,6 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 previous_word = torch.stack([ground_truth_1, ground_truth_2, ground_truth_3]).mean(dim=0)
             else:
                 previous_word = self.noun_embedding(noun_guess)
-
-            prev_widths = torch.ceil(prev_widths * 10).long()
-            prev_heights = torch.ceil(prev_heights * 10).long()
-            prev_ctr_x = torch.ceil(prev_ctr_x * 10).long()
-            prev_ctr_y = torch.ceil(prev_ctr_y * 10).long()
-
-            prev_widths = torch.clamp(prev_widths, 0, 10)
-            prev_heights = torch.clamp(prev_heights, 0, 10)
-            prev_ctr_x = torch.clamp(prev_ctr_x, 0, 10)
-            prev_ctr_y = torch.clamp(prev_ctr_y, 0, 10)
-
-            if not self.training:
-                bbox_exist = torch.sigmoid(bbox_exist)
-                prev_widths[bbox_exist < 0.5] = 0
-                prev_heights[bbox_exist < 0.5] = 0
-                prev_ctr_x[bbox_exist < 0.5] = 0
-                prev_ctr_y[bbox_exist < 0.5] = 0
-
-            previous_box_embed = torch.cat(
-                [self.bbox_width_embed(prev_widths), self.bbox_height_embed(prev_heights),
-                 self.bbox_x_embed(prev_ctr_x), self.bbox_y_embed(prev_ctr_y)], dim=1)
 
             if self.training:
                 class_list.append(classification)
