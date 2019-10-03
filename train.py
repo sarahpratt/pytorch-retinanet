@@ -117,9 +117,10 @@ def main(args=None):
 		retinanet.module.load_state_dict(x)
 
 	#load_old_weights(retinanet, './retinanet_50.pth')
-	x = torch.load('./retinanet_8.pth')
-	retinanet.module.load_state_dict(x['state_dict'])
-	# optimizer.load_state_dict(x['optimizer'])
+	#x = torch.load('./retinanet_8.pth')
+	#load_old_weights_2(retinanet, './retinanet_8.pth')
+	#retinanet.module.load_state_dict(x['state_dict'])
+	#optimizer.load_state_dict(x['optimizer'])
 	# for param_group in optimizer.param_groups:
 	# 	param_group["lr"] = 0.00001
 
@@ -238,6 +239,7 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		if parser.just_verb_loss:
 			loss = verb_loss.mean()
 		elif parser.just_noun_loss:
+			#print("working")
 			loss = noun_loss.mean()
 		elif parser.no_verb_loss:
 			loss = class_loss.mean() + reg_loss.mean() + bbox_loss.mean()
@@ -373,6 +375,16 @@ def load_old_weights(retinanet, weights):
 		if weight not in keys:
 			just_resnet_weights['feature_extractor.' + weight] = x[weight]
 		else:
+			just_resnet_weights[weight] = x[weight]
+	model_dict = retinanet.module.state_dict()
+	model_dict.update(just_resnet_weights)
+	retinanet.module.load_state_dict(model_dict)
+
+def load_old_weights_2(retinanet, weights):
+	x = torch.load(weights)['state_dict']
+	just_resnet_weights = {}
+	for weight in x:
+		if 'noun_classifier' not in weight:
 			just_resnet_weights[weight] = x[weight]
 	model_dict = retinanet.module.state_dict()
 	model_dict.update(just_resnet_weights)
