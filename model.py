@@ -197,20 +197,20 @@ class LearnableVector(nn.Module):
 class ClassifyLocalFeatures(nn.Module):
     def __init__(self, vocab_size):
         super(ClassifyLocalFeatures, self).__init__()
-        # self.local_linear = nn.Linear(2048, 256)
-        # self.hidden_linear = nn.Linear(2048, 256)
-        # self.features_linear = nn.Linear(512, 256)
-        # self.act = nn.ReLU()
-        # self.vocab_linear = nn.Linear(256, vocab_size)
-        self.vocab_linear = nn.Linear(2048 + 2048, vocab_size)
+        self.local_linear = nn.Linear(2048, 256)
+        self.hidden_linear = nn.Linear(2048, 256)
+        self.features_linear = nn.Linear(512, 256)
+        self.act = nn.ReLU()
+        self.vocab_linear = nn.Linear(256, vocab_size)
+        self.vocab_linear = nn.Linear(2048, vocab_size)
 
     def forward(self, local_features, rnn_features):
         # local = self.local_linear(local_features)
         # hidden = self.hidden_linear(rnn_features)
-        out = torch.cat((local_features, rnn_features), dim=1)
+        # out = torch.cat((local, hidden), dim=1)
         # out = self.features_linear(out)
         # out = self.act(out)
-        return self.vocab_linear(out)
+        return self.vocab_linear(rnn_features)
 
 
 class ResNet_RetinaNet_RNN(nn.Module):
@@ -260,7 +260,9 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.bbox_x_embed = nn.Embedding(11, 16)
         self.bbox_y_embed = nn.Embedding(11, 16)
 
-        self.rnn = nn.LSTMCell(2048 + 512 + 256 + 64, 1024*2)
+        #self.rnn = nn.LSTMCell(2048 + 512 + 256 + 64, 1024*2)
+        self.rnn = nn.LSTMCell(2048 + 512, 1024*2)
+
 
         for name, param in self.rnn.named_parameters():
             if 'weight' in name:
@@ -457,7 +459,9 @@ class ResNet_RetinaNet_RNN(nn.Module):
         previous_location_features = torch.zeros(batch_size, 2048).cuda(x.device)
 
         for i in range(6):
-            rnn_input = torch.cat((image_predict, previous_word, previous_role, previous_box_embed), dim=1)
+            rnn_input = torch.cat((image_predict, previous_word), dim=1)
+
+            #rnn_input = torch.cat((image_predict, previous_word, previous_role, previous_box_embed), dim=1)
             hx, cx = self.rnn(rnn_input, (hx, cx))
 
             with torch.no_grad():
