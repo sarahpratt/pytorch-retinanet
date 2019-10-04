@@ -96,14 +96,18 @@ class RegressionModel(nn.Module):
         self.max_dims = [18, 9, 5, 3]
         self.offset = [0, 18 ** 2, 18 ** 2 + 9 ** 2 - 1, 18 ** 2 + 9 ** 2 + 5 ** 2 - 2]
 
-    def forward(self, x, feature_pyramid_level):
+    def forward(self, x, feature_pyramid_level, detach_embedding=False):
         batch_size, channels, width, height = x.shape
 
         dimention = self.max_dims[feature_pyramid_level]
 
         grid = torch.arange(dimention * dimention).cuda()
         grid = grid + self.offset[feature_pyramid_level]
-        grid_embed = self.location_embedding(grid).view(-1, dimention, dimention)[:, :width, :height].cuda()
+        if detach_embedding:
+            with torch.no_grad():
+                grid_embed = self.location_embedding(grid).view(-1, dimention, dimention)[:, :width, :height].cuda()
+        else:
+            grid_embed = self.location_embedding(grid).view(-1, dimention, dimention)[:, :width, :height].cuda()
 
         grid_embed = grid_embed.expand(batch_size, grid_embed.shape[0], grid_embed.shape[1], grid_embed.shape[2])
 
@@ -155,7 +159,7 @@ class ClassificationModel(nn.Module):
         self.max_dims = [18, 9, 5, 3]
         self.offset = [0, 18**2, 18**2 + 9**2 - 1, 18**2 + 9**2 + 5**2 - 2]
 
-    def forward(self, x, noun_dist, feature_pyramid_level):
+    def forward(self, x, noun_dist, feature_pyramid_level, detach_embedding=False):
 
         batch_size, channels, width, height = x.shape
 
@@ -163,7 +167,13 @@ class ClassificationModel(nn.Module):
 
         grid = torch.arange(dimention * dimention).cuda()
         grid = grid + self.offset[feature_pyramid_level]
-        grid_embed = self.location_embedding(grid).view(-1, dimention, dimention)[:, :width, :height].cuda()
+
+        if detach_embedding:
+            with torch.no_grad():
+                grid_embed = self.location_embedding(grid).view(-1, dimention, dimention)[:, :width, :height].cuda()
+        else:
+            grid_embed = self.location_embedding(grid).view(-1, dimention, dimention)[:, :width, :height].cuda()
+
         grid = grid.view(dimention, dimention)[:width, :height].cuda()
         grid_list = grid[:width, :height].view(1, width, height, 1).expand(batch_size, width, height, 9).contiguous().view(batch_size, -1)
 
@@ -372,7 +382,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
         return x_weights*y_weights
 
 
-    def forward(self, inputs, roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False):
+    def forward(self, inputs, roles, detach_resnet=False, use_gt_nouns=False, use_gt_verb=False, detach_embedding=False):
 
         if self.training:
             img_batch, annotations, verb, widths, heights = inputs
@@ -463,13 +473,13 @@ class ResNet_RetinaNet_RNN(nn.Module):
             rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
 
 
-            regression = torch.cat([self.regressionModel(rnn_feature_shapes[ii], ii) for ii in range(len(rnn_feature_shapes))], dim=1)
+            regression = torch.cat([self.regressionModel(rnn_feature_shapes[ii], ii, detach_embedding=detach_embedding) for ii in range(len(rnn_feature_shapes))], dim=1)
 
             classifications = []
             bbox_exist = []
             grid_indices = []
             for ii in range(len(rnn_feature_shapes)):
-                classication = self.classificationModel(rnn_feature_shapes[ii], noun_distribution, feature_pyramid_level=ii)
+                classication = self.classificationModel(rnn_feature_shapes[ii], noun_distribution, feature_pyramid_level=ii, detach_embedding=detach_embedding)
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
                 grid_indices.append(classication[2])
@@ -512,16 +522,30 @@ class ResNet_RetinaNet_RNN(nn.Module):
                 location_embeddings = torch.zeros(batch_size, 4).cuda()
                 for iii in range(batch_size):
                     if annotations[iii, i, 0] == -1 or not IoU2[iii].any():
-                        location_embeddings[iii] = self.location_embedding(torch.tensor(self.max_spatial_dims - 1).view(1, -1).cuda().long())
+                        if detach_embedding:
+                            with torch.no_grad():
+                                location_embeddings[iii] = self.location_embedding(torch.tensor(self.max_spatial_dims - 1).view(1, -1).cuda().long())
+                        else:
+                            location_embeddings[iii] = self.location_embedding(
+                                torch.tensor(self.max_spatial_dims - 1).view(1, -1).cuda().long())
                     else:
                         inds = grid_indices[iii][IoU2[iii]]
-                        embedding = self.location_embedding(inds).mean(dim=0)
+                        if detach_embedding:
+                            with torch.no_grad():
+                                embedding = self.location_embedding(inds).mean(dim=0)
+                        else:
+                            embedding = self.location_embedding(inds).mean(dim=0)
+
                         location_embeddings[iii] = embedding
 
             else:
                 best_bbox_embed = grid_indices[torch.arange(batch_size), best_bbox]
                 best_bbox_embed[bbox_exist < 0.5] = self.max_spatial_dims - 1
-                location_embeddings = self.location_embedding(best_bbox_embed)
+                if detach_embedding:
+                    with torch.no_grad():
+                        location_embeddings = self.location_embedding(best_bbox_embed)
+                else:
+                    location_embeddings = self.location_embedding(best_bbox_embed)
 
 
             if self.training:
@@ -542,8 +566,15 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
             height = torch.clamp(torch.floor(((height/img_batch.shape[3])*10)).long(), 0, 9)
             width = torch.clamp(torch.floor(((width/img_batch.shape[2])*10)).long(), 0, 9)
-            prev_height = self.height_emb(height)
-            prev_width = self.width_emb(width)
+
+            if detach_embedding:
+                with torch.no_grad():
+                    prev_height = self.height_emb(height)
+                    prev_width = self.width_emb(width)
+            else:
+                prev_height = self.height_emb(height)
+                prev_width = self.width_emb(width)
+
 
         if self.training:
             anns = annotations[:, :, :].unsqueeze(1)

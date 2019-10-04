@@ -199,9 +199,9 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		annotations[:, 2, 1] = annotations[:, 0, 1] + fifth_of_width
 		annotations[:, 2, 3] = annotations[:, 0, 3] - fifth_of_width
 
-		annotations[:, 2, 4] = annotations[:, 0, 4]
-		annotations[:, 2, 5] = annotations[:, 0, 5]
-		annotations[:, 2, 6] = annotations[:, 0, 6]
+		# annotations[:, 2, 4] = annotations[:, 0, 4]
+		# annotations[:, 2, 5] = annotations[:, 0, 5]
+		# annotations[:, 2, 6] = annotations[:, 0, 6]
 
 		#pdb.set_trace()
 		verbs = data['verb_idx'].cuda()
@@ -209,8 +209,13 @@ def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, rol
 		heights = data['heights'].cuda()
 		roles = role_tensor[verbs].cuda()
 
+		if epoch_num == 0:
+			stop_train_embedding = False
+		else:
+			stop_train_embedding = True
+
 		class_loss, reg_loss, verb_loss, bbox_loss, all_rnn_class_loss = retinanet([image, annotations, verbs, widths, heights], roles,
-															   deatch_resnet, use_gt_nouns)
+															   deatch_resnet, use_gt_nouns, detach_embedding=stop_train_embedding)
 
 
 		avg_class_loss += class_loss.mean().item()
