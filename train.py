@@ -109,25 +109,14 @@ def main(args=None):
 		x = torch.load('./verb_warm_up.pth')
 		retinanet.module.load_state_dict(x)
 
-	#load_old_weights(retinanet, './retinanet_50.pth')
-	print("loading weights")
-	x = torch.load('./retinanet_30.pth')
-	retinanet.module.load_state_dict(x['state_dict'])
-	# optimizer.load_state_dict(x['optimizer'])
-	# for param_group in optimizer.param_groups:
-	# 	param_group["lr"] = 0.00001
-
 	print('weights loaded')
-
-	#orig_resnet_weight = retinanet.module.layer4[2].conv3.weight
-	#retinanet.module.feature_extractor.layer4.register_backward_hook(module_hook)
 
 	for epoch_num in range(parser.resume_epoch, parser.epochs):
 
-		#train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, role_tensor)
+		train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer, role_tensor)
 
-		#if epoch_num % 2 == 0:
-		#	torch.save({'state_dict': retinanet.module.state_dict(), 'optimizer': optimizer.state_dict()}, log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
+		if epoch_num % 2 == 0:
+			torch.save({'state_dict': retinanet.module.state_dict(), 'optimizer': optimizer.state_dict()}, log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
 
 		if epoch_num%1 == 0:
 			print('Evaluating dataset')
