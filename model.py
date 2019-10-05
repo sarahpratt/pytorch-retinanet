@@ -84,7 +84,7 @@ class RegressionModel(nn.Module):
         self.location_embedding = location_embedding
 
 
-        self.conv1 = nn.Conv2d(num_features_in + 4, feature_size, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(num_features_in + 4 + 72, feature_size, kernel_size=3, padding=1)
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act2 = nn.ReLU()
@@ -96,7 +96,7 @@ class RegressionModel(nn.Module):
         self.max_dims = [18, 9, 5, 3]
         self.offset = [0, 18 ** 2, 18 ** 2 + 9 ** 2 - 1, 18 ** 2 + 9 ** 2 + 5 ** 2 - 2]
 
-    def forward(self, x, feature_pyramid_level, detach_embedding=False):
+    def forward(self, x, all_previous_location, feature_pyramid_level, detach_embedding=False):
         batch_size, channels, width, height = x.shape
 
         dimention = self.max_dims[feature_pyramid_level]
@@ -111,7 +111,9 @@ class RegressionModel(nn.Module):
 
         grid_embed = grid_embed.expand(batch_size, grid_embed.shape[0], grid_embed.shape[1], grid_embed.shape[2])
 
-        new_x = torch.cat((x, grid_embed), dim=1)
+        all_previous_location_grid = all_previous_location.view(batch_size, 72, 1, 1).expand(batch_size, 72, width, height)
+
+        new_x = torch.cat((x, grid_embed, all_previous_location_grid), dim=1)
 
         out = self.conv1(new_x)
         out = self.act1(out)
@@ -139,7 +141,7 @@ class ClassificationModel(nn.Module):
         self.bbox_conv = nn.Conv2d(4, 64, kernel_size=1)
         self.mask_conv = nn.Conv2d(1, 64, kernel_size=1)
 
-        self.conv1 = nn.Conv2d(num_features_in + 4, feature_size, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(num_features_in + 4 + 72, feature_size, kernel_size=3, padding=1)
         #self.bn1 = nn.BatchNorm2d(feature_size)
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
@@ -159,7 +161,7 @@ class ClassificationModel(nn.Module):
         self.max_dims = [18, 9, 5, 3]
         self.offset = [0, 18**2, 18**2 + 9**2 - 1, 18**2 + 9**2 + 5**2 - 2]
 
-    def forward(self, x, noun_dist, feature_pyramid_level, detach_embedding=False):
+    def forward(self, x, noun_dist, all_previous_location, feature_pyramid_level, detach_embedding=False):
 
         batch_size, channels, width, height = x.shape
 
@@ -179,7 +181,9 @@ class ClassificationModel(nn.Module):
 
         grid_embed = grid_embed.expand(batch_size, grid_embed.shape[0], grid_embed.shape[1], grid_embed.shape[2])
 
-        new_x = torch.cat((x, grid_embed), dim=1)
+        all_previous_location_grid = all_previous_location.view(batch_size, 72, 1, 1).expand(batch_size, 72, width, height)
+
+        new_x = torch.cat((x, grid_embed, all_previous_location_grid), dim=1)
 
         out = self.conv1(new_x)
         out = self.act1(out)
@@ -424,6 +428,7 @@ class ResNet_RetinaNet_RNN(nn.Module):
         # Get feature pyramid
         features = self.fpn([x2, x3, x4])
         anchors = self.anchors(img_batch)
+        pdb.set_trace()
         features.pop(0)  # SARAH - remove feature batch
 
         # init LSTM inputs
@@ -453,6 +458,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
 
         previous_location_features = torch.zeros(batch_size, 2048).cuda(x.device)
 
+        all_previous_location = torch.zeros(batch_size, 6*12).cuda(x.device)
+
         for i in range(6):
             rnn_input = torch.cat((image_predict, previous_word, location_embeddings, prev_height, prev_width), dim=1)
 
@@ -473,13 +480,13 @@ class ResNet_RetinaNet_RNN(nn.Module):
             rnn_feature_shapes = [torch.cat([just_rnn[ii], rnn_feature_mult[ii], features[ii]], dim=1) for ii in range(len(features))]
 
 
-            regression = torch.cat([self.regressionModel(rnn_feature_shapes[ii], ii, detach_embedding=detach_embedding) for ii in range(len(rnn_feature_shapes))], dim=1)
+            regression = torch.cat([self.regressionModel(rnn_feature_shapes[ii], all_previous_location, ii, detach_embedding=detach_embedding) for ii in range(len(rnn_feature_shapes))], dim=1)
 
             classifications = []
             bbox_exist = []
             grid_indices = []
             for ii in range(len(rnn_feature_shapes)):
-                classication = self.classificationModel(rnn_feature_shapes[ii], noun_distribution, feature_pyramid_level=ii, detach_embedding=detach_embedding)
+                classication = self.classificationModel(rnn_feature_shapes[ii], noun_distribution, all_previous_location, feature_pyramid_level=ii, detach_embedding=detach_embedding)
                 bbox_exist.append(classication[1])
                 classifications.append(classication[0])
                 grid_indices.append(classication[2])
@@ -574,6 +581,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
             else:
                 prev_height = self.height_emb(height)
                 prev_width = self.width_emb(width)
+
+            all_previous_location[:, 6 * i:6 * i + 12] = torch.cat((location_embeddings, prev_height, prev_width), dim=1)
 
 
         if self.training:
