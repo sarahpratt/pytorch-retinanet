@@ -73,8 +73,8 @@ class PyramidFeatures(nn.Module):
 class RegressionModel(nn.Module):
     def __init__(self, num_features_in, num_anchors=9, feature_size=256):
         super(RegressionModel, self).__init__()
-
-        self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
+        self.spatial_conv = nn.Conv2d(2, 64, kernel_size=1)
+        self.conv1 = nn.Conv2d(num_features_in + 64, feature_size, kernel_size=3, padding=1)
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act2 = nn.ReLU()
@@ -85,7 +85,19 @@ class RegressionModel(nn.Module):
         self.output = nn.Conv2d(feature_size, num_anchors * 4, kernel_size=3, padding=1)
 
     def forward(self, x):
-        out = self.conv1(x)
+        batch_size, channels, width, height = x.shape
+
+        x_directions = (torch.arange(x.shape[2]).float() / x.shape[2]).cuda()
+        x_directions = x_directions.view(1, 1, x_directions.shape[0], 1).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
+
+        y_directions = (torch.arange(x.shape[3]).float() / x.shape[3]).cuda()
+        y_directions = y_directions.view(1, 1, 1, y_directions.shape[0]).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
+        spatial = torch.cat((x_directions, y_directions), dim=1)
+        spatial = self.spatial_conv(spatial)
+
+        new_x = torch.cat((x, spatial), dim=1)
+
+        out = self.conv1(new_x)
         out = self.act1(out)
         out = self.conv2(out)
         out = self.act2(out)
@@ -97,7 +109,7 @@ class RegressionModel(nn.Module):
         out = self.output(out1)
         # out is B x C x W x H, with C = 4*num_anchors
         out = out.permute(0, 2, 3, 1)
-        return out.contiguous().view(out.shape[0], -1, 4)
+        return out.contiguous().view(batch_size, -1, 4)
 
 
 class ClassificationModel(nn.Module):
@@ -105,7 +117,9 @@ class ClassificationModel(nn.Module):
         super(ClassificationModel, self).__init__()
         self.num_classes = num_classes
         self.num_anchors = num_anchors
-        self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
+        self.spatial_conv = nn.Conv2d(2, 64, kernel_size=1)
+
+        self.conv1 = nn.Conv2d(num_features_in + 64, feature_size, kernel_size=3, padding=1)
         self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act2 = nn.ReLU()
@@ -120,7 +134,20 @@ class ClassificationModel(nn.Module):
         self.output_act_retina = nn.Sigmoid()
 
     def forward(self, x, noun_dist):
-        out = self.conv1(x)
+
+        batch_size, channels, width, height = x.shape
+
+        x_directions = (torch.arange(x.shape[2]).float() / x.shape[2]).cuda()
+        x_directions = x_directions.view(1, 1, x_directions.shape[0], 1).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
+
+        y_directions = (torch.arange(x.shape[3]).float() / x.shape[3]).cuda()
+        y_directions = y_directions.view(1, 1, 1, y_directions.shape[0]).expand([x.shape[0], 1, x.shape[2], x.shape[3]])
+        spatial = torch.cat((x_directions, y_directions), dim=1)
+        spatial = self.spatial_conv(spatial)
+
+        new_x = torch.cat((x, spatial), dim=1)
+
+        out = self.conv1(new_x)
         out = self.act1(out)
         out = self.conv2(out)
         out = self.act2(out)
@@ -138,9 +165,9 @@ class ClassificationModel(nn.Module):
         out1 = out1.permute(0, 2, 3, 1)  # out is B x C x W x H, with C = n_classes + n_anchors
         batch_size, width, height, channels = out1.shape
         out2 = out1.view(batch_size, width, height, self.num_anchors, self.num_classes)
-        nouns = noun_dist.view(x.shape[0], 1, self.num_classes)
+        nouns = noun_dist.view(batch_size, 1, self.num_classes)
 
-        return out2.contiguous().view(x.shape[0], -1, self.num_classes) * nouns, bbox_exists
+        return out2.contiguous().view(batch_size, -1, self.num_classes) * nouns, bbox_exists
 
 
 class ResNet_RetinaNet_RNN(nn.Module):
