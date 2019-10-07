@@ -37,7 +37,7 @@ def main(args=None):
 	parser.add_argument('--classes-file', help='Path to file containing class list (see readme)')
 	parser.add_argument('--val-file', help='Path to file containing validation annotations (optional, see readme)')
 	parser.add_argument('--depth', help='Resnet depth, must be one of 18, 34, 50, 101, 152', type=int, default=50)
-	parser.add_argument('--epochs', help='Number of epochs', type=int, default=100)
+	parser.add_argument('--epochs', help='Number of epochs', type=int, default=42)
 	parser.add_argument('--title', type=str, default='')
 	parser.add_argument("--resume_model", type=str, default="")
 	parser.add_argument("--resume_epoch", type=int, default=0)
@@ -110,6 +110,8 @@ def main(args=None):
 		retinanet.module.load_state_dict(x)
 
 	print('weights loaded')
+
+	#path = './runs/lr=.0001_augment=true_batch-size=128_detach_epoch=60_title=meshgrid_class_and_reg_expert_2019-10-05_14:17:04'
 
 	for epoch_num in range(parser.resume_epoch, parser.epochs):
 
@@ -248,7 +250,7 @@ def evaluate(retinanet, dataloader_val, parser, dataset_val, dataset_train, verb
 		heights = data['heights'].cuda()
 		roles = role_tensor[y].cuda()
 
-		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights], roles, use_gt_verb=False)
+		verb_guess, noun_predicts, bbox_predicts, bbox_exists = retinanet([x, y, widths, heights], roles, use_gt_verb=True)
 		for i in range(len(verb_guess)):
 			image = data['img_name'][i].split('/')[-1]
 			verb = dataset_train.idx_to_verb[verb_guess[i]]

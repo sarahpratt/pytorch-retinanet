@@ -15,10 +15,13 @@ class Anchors(nn.Module):
         if sizes is None:
             self.sizes = [2 ** (x + 2) for x in self.pyramid_levels]
         if ratios is None:
-            self.ratios = np.array([0.25, 0.5, 1, 2, 4])
+            self.ratios = np.array([0.35, 0.65, 0.95, 1.38, 2.3])
+            #self.ratios = np.array([0.5, 1, 2])
+            #self.ratios = np.array([0.62, 1.34])
         if scales is None:
-            self.scales = np.array([2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)])
-            #self.scales = np.array([2 ** 0])
+            #self.scales = np.array([2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)])
+            self.scales = np.array([2 ** 0])
+           # self.scales = np.array([2 ** 0, 2 ** (1.0 / 3.0)])
 
 
     def forward(self, image):
@@ -37,8 +40,8 @@ class Anchors(nn.Module):
 
         all_anchors = np.expand_dims(all_anchors, axis=0)
 
-        #return torch.from_numpy(all_anchors.astype(np.float32)).cuda()
-        return torch.from_numpy(all_anchors.astype(np.float32))
+        return torch.from_numpy(all_anchors.astype(np.float32)).cuda()
+        #return torch.from_numpy(all_anchors.astype(np.float32))
 
 
 def generate_anchors(base_size=16, ratios=None, scales=None):
@@ -48,10 +51,13 @@ def generate_anchors(base_size=16, ratios=None, scales=None):
     """
 
     if ratios is None:
-        ratios = np.array([0.5, 1, 2])
+        #ratios = np.array([0.5, 1, 2])
+        ratios = np.array([0.35, 0.65, 0.95, 1.38, 2.3])
+
 
     if scales is None:
-        scales = np.array([2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)])
+        #scales = np.array([2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)])
+        scales = np.array([2 ** 0])
 
     num_anchors = len(ratios) * len(scales)
 
