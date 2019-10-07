@@ -151,7 +151,7 @@ class ClassificationModel(nn.Module):
 
         grid = grid.view(dimention, dimention)[:width, :height].cuda()
         grid_list = grid[:width, :height].view(1, width, height, 1).expand(batch_size, width, height,
-                                                                           5).contiguous().view(batch_size, -1)
+                                                                           9).contiguous().view(batch_size, -1)
 
         grid_embed = grid_embed.expand(batch_size, grid_embed.shape[0], grid_embed.shape[1], grid_embed.shape[2])
 
@@ -215,8 +215,8 @@ class ResNet_RetinaNet_RNN(nn.Module):
         self.height_emb = nn.Embedding(10, 16)
         self.width_emb = nn.Embedding(10, 16)
 
-        self.regressionModel = RegressionModel(768, self.location_embedding, num_anchors=5)
-        self.classificationModel = ClassificationModel(768, self.location_embedding, num_classes=num_classes, num_anchors=5)
+        self.regressionModel = RegressionModel(768, self.location_embedding, num_anchors=9)
+        self.classificationModel = ClassificationModel(768, self.location_embedding, num_classes=num_classes, num_anchors=9)
 
         # init rnn and rnn weights
         self.rnn = nn.LSTMCell(2048 + 512 + 16*3, 1024*2)

@@ -36,7 +36,6 @@ def load_jsons():
             nouns_set.add(noun.split('_')[0])
     return dataset_val, dev_gt, verb_orders, all_idx_to_english, nouns_set
 
-@st.cache(ignore_hash=True)
 def load_model(dataset_val):
     retinanet = model.resnet50(num_classes=dataset_val.num_classes(), pretrained=True)
     retinanet = retinanet.cuda()
@@ -169,9 +168,10 @@ evaluator.update(verb, nouns, bboxes, verb_gt, nouns_gt, boxes_gt, verb_orders)
 order_gt = verb_orders[verb_gt]["order"]
 order_baseline = verb_orders[baseline_verb]["order"]
 order_pred = verb_orders[verb]["order"]
-st.markdown("<center><pre>Ground Truth: " + verb_gt + "            Baseline: " + baseline_verb + "            Model: " + verb + "   " + "</pre></center>")
+#st.markdown("<center><pre>Ground Truth: " + verb_gt + "            Baseline: " + baseline_verb + "            Model: " + verb + "   " + "</pre></center>")
+st.markdown( verb_gt + "     " + baseline_verb +  "      " + verb)
 
-im_size = 230
+im_size = 200
 
 for i in range(6):
 
