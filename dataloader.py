@@ -11,7 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, utils
 from torch.utils.data.sampler import Sampler
 
-from pycocotools.coco import COCO
+#from pycocotools.coco import COCO
 
 import skimage.io
 import skimage.transform
@@ -331,7 +331,7 @@ class CSVDataset(Dataset):
         return self.labels[label]
 
     def num_classes(self):
-        return max(self.classes.values()) + 1
+        return 1
 
     def image_aspect_ratio(self, image_index):
         image = Image.open(self.image_names[image_index])

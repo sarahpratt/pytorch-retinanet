@@ -6,14 +6,14 @@ import torch.utils.model_zoo as model_zoo
 from utils import BasicBlock, Bottleneck, BBoxTransform, ClipBoxes
 from anchors import Anchors
 import losses
-from lib.nms.pth_nms import pth_nms
+#from lib.nms.pth_nms import pth_nms
 import pdb
 
-def nms(dets, thresh):
-    "Dispatch to either CPU or GPU NMS implementations.\
-    Accept dets as tensor"""
-
-    return pth_nms(dets, thresh)
+# def nms(dets, thresh):
+#     "Dispatch to either CPU or GPU NMS implementations.\
+#     Accept dets as tensor"""
+#
+#     return pth_nms(dets, thresh)
 
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',

@@ -76,9 +76,7 @@ class FocalLoss(nn.Module):
             targets[positive_indices, :] = 0
 
             #assign for the 3 different classes
-            targets[positive_indices, assigned_annotations[positive_indices, 4].long()] = 1
-            targets[positive_indices, assigned_annotations[positive_indices, 5].long()] = 1
-            targets[positive_indices, assigned_annotations[positive_indices, 6].long()] = 1
+            targets[positive_indices, :] = 1
 
             alpha_factor = torch.ones(targets.shape).cuda() * alpha
 

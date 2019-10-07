@@ -25,9 +25,10 @@ from dataloader import CocoDataset, CSVDataset, collater, Resizer, AspectRatioBa
 from torch.utils.data import Dataset, DataLoader
 
 import coco_eval
+import json
 import csv_eval
 
-assert torch.__version__.split('.')[1] == '4'
+#assert torch.__version__.split('.')[1] == '4'
 
 print('CUDA available: {}'.format(torch.cuda.is_available()))
 
@@ -56,6 +57,10 @@ def main(args=None):
 	writer = SummaryWriter(log_dir)
 
 	#pdb.set_trace()
+
+	print("loading dev")
+	with open('./dev.json') as f:
+		dev_gt = json.load(f)
 
 	with open(log_dir + '/config.csv', 'w') as f:
 		for item in vars(parser):
@@ -99,17 +104,6 @@ def main(args=None):
 	else:
 		raise ValueError('Unsupported model depth, must be one of 18, 34, 50, 101, 152')
 
-	if parser.resume_model:
-		x = torch.load(parser.resume_model)
-		if parser.reinit_classifier:
-			dummy = nn.Conv2d(256, 9*dataset_train.num_classes(), kernel_size=3, padding=1)
-			x['classificationModel.output.weight'] = dummy.weight.clone()
-			x['classificationModel.output.bias'] = dummy.bias.clone()
-			prior = 0.01
-			x['classificationModel.output.weight'].data.fill_(0)
-			x['classificationModel.output.bias'].data.fill_(-math.log((1.0 - prior) / prior))
-		retinanet.load_state_dict(x)
-
 	use_gpu = True
 
 	if use_gpu:
@@ -122,105 +116,92 @@ def main(args=None):
 
 	optimizer = optim.Adam(retinanet.parameters(), lr=parser.lr)
 
-	scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
-
-	loss_hist = collections.deque(maxlen=500)
-
 	retinanet.train()
 	retinanet.module.freeze_bn()
-
-	# x = torch.load('./csv_retinanet_20.pth')
-	# retinanet.module.load_state_dict(x)
 
 	print('Num training images: {}'.format(len(dataset_train)))
 
 	for epoch_num in range(parser.resume_epoch, parser.epochs):
 
-		retinanet.train()
-		retinanet.module.freeze_bn()
-		
-		epoch_loss = []
-		i = 0
-		avg_class_loss = 0.0
-		avg_reg_loss = 0.0
-
-		for iter_num, data in enumerate(dataloader_train):
-			i += 1
-
-			try:
-				optimizer.zero_grad()
-
-				#pdb.set_trace()
-
-				shape = data['img'].shape[2] * data['img'].shape[3]
-				writer.add_scalar("train/image_shape", shape, epoch_num * (len(dataloader_train)) + i)
-
-				classification_loss, regression_loss = retinanet([data['img'].cuda().float(), data['annot'].cuda().float()])
-
-				classification_loss = classification_loss.mean()
-				regression_loss = regression_loss.mean()
-
-				avg_class_loss += classification_loss
-				avg_reg_loss += regression_loss
-
-				if i % 100 == 0:
-					writer.add_scalar("train/classification_loss", avg_class_loss / 100,
-									  epoch_num * (len(dataloader_train)) + i)
-					writer.add_scalar("train/regression_loss", avg_reg_loss / 100,
-									  epoch_num * (len(dataloader_train)) + i)
-					avg_class_loss = 0.0
-					avg_reg_loss = 0.0
-
-				loss = classification_loss + regression_loss
-
-				if bool(loss == 0):
-					continue
-
-				loss.backward()
-
-				torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
-
-				optimizer.step()
-
-				loss_hist.append(float(loss))
-
-				epoch_loss.append(float(loss))
-
-				print('Epoch: {} | Iteration: {} | Classification loss: {:1.5f} | Regression loss: {:1.5f} | Running loss: {:1.5f}'.format(epoch_num, iter_num, float(classification_loss), float(regression_loss), np.mean(loss_hist)))
-
-				del classification_loss
-				del regression_loss
-			except Exception as e:
-				print(e)
-				continue
-
-		if epoch_num%2 == 0:
-
-			print('Evaluating dataset')
-
-			retinanet.eval()
-			mAP, AP_string = csv_eval.evaluate(dataset_val, retinanet.module, score_threshold=0.1)
-			with open(log_dir + '/map_files/retinanet_{}.txt'.format(epoch_num), 'w') as f:
-				f.write(AP_string)
-			total = 0.0
-			all = 0.0
-			total_unweighted = 0.0
-			for c in mAP:
-				total += mAP[c][0]*mAP[c][1]
-				total_unweighted += mAP[c][0]
-				all += mAP[c][1]
-			writer.add_scalar("val/mAP", total/all, epoch_num)
-			writer.add_scalar("val/mAP_unweighted", total_unweighted / len(mAP), epoch_num)
-
-
-		scheduler.step(np.mean(epoch_loss))
-
+		train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer)
 
 		torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
 
-	retinanet.eval()
+		# eval(retinanet, dataloader_val, parser, dataset_val, dataset_train, dev_gt, epoch_num, writer,)
 
-	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
+
+def train(retinanet, optimizer, dataloader_train, parser, epoch_num, writer):
+	retinanet.train()
+	retinanet.module.freeze_bn()
+	i = 0
+	avg_class_loss = 0.0
+	avg_reg_loss = 0.0
+	for iter_num, data in enumerate(dataloader_train):
+		i += 1
+		optimizer.zero_grad()
+
+		classification_loss, regression_loss = retinanet([data['img'].cuda().float(), data['annot'].cuda().float()])
+
+		classification_loss = classification_loss.mean()
+		regression_loss = regression_loss.mean()
+
+		avg_class_loss += classification_loss
+		avg_reg_loss += regression_loss
+
+		if i % 100 == 0:
+			writer.add_scalar("train/classification_loss", avg_class_loss / 100,
+							  epoch_num * (len(dataloader_train)) + i)
+			writer.add_scalar("train/regression_loss", avg_reg_loss / 100,
+							  epoch_num * (len(dataloader_train)) + i)
+			print(
+				'Epoch: {} | Iteration: {} | Classification loss: {:1.5f} | Regression loss: {:1.5f}'.format(
+					epoch_num, iter_num, float(avg_class_loss/100), float(avg_reg_loss/100)))
+
+			avg_class_loss = 0.0
+			avg_reg_loss = 0.0
+
+		loss = classification_loss + regression_loss
+
+		if bool(loss == 0):
+			continue
+
+		loss.backward()
+
+		torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
+
+		optimizer.step()
+
+
+#
+# def eval(retinanet, dataloader_val, parser, dataset_val, dataset_train, dev_gt, epoch_num, writer, role_tensor):
+#
+# 		if epoch_num%2 == 0:
+#
+# 			print('Evaluating dataset')
+#
+# 			retinanet.eval()
+# 			mAP, AP_string = csv_eval.evaluate(dataset_val, retinanet.module, score_threshold=0.1)
+# 			with open(log_dir + '/map_files/retinanet_{}.txt'.format(epoch_num), 'w') as f:
+# 				f.write(AP_string)
+# 			total = 0.0
+# 			all = 0.0
+# 			total_unweighted = 0.0
+# 			for c in mAP:
+# 				total += mAP[c][0]*mAP[c][1]
+# 				total_unweighted += mAP[c][0]
+# 				all += mAP[c][1]
+# 			writer.add_scalar("val/mAP", total/all, epoch_num)
+# 			writer.add_scalar("val/mAP_unweighted", total_unweighted / len(mAP), epoch_num)
+#
+#
+# 		scheduler.step(np.mean(epoch_loss))
+#
+#
+# 		torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/retinanet_{}.pth'.format(epoch_num))
+#
+# 	retinanet.eval()
+#
+# 	torch.save(retinanet.module.state_dict(), log_dir + '/checkpoints/model_final.pth'.format(epoch_num))
 
 if __name__ == '__main__':
  main()
