@@ -333,6 +333,9 @@ class CSVDataset(Dataset):
     def num_classes(self):
         return 1
 
+    def num_nouns(self):
+        return len(self.classes)
+
     def image_aspect_ratio(self, image_index):
         image = Image.open(self.image_names[image_index])
         return float(image.width) / float(image.height)

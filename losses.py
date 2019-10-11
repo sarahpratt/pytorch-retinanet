@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import pdb
+import torch.nn.functional as F
 
 def calc_iou(a, b):
     area = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
@@ -24,12 +26,13 @@ def calc_iou(a, b):
 class FocalLoss(nn.Module):
     #def __init__(self):
 
-    def forward(self, classifications, regressions, anchors, annotations):
+    def forward(self, classifications, regressions, anchors, annotations, nouns_dist):
         alpha = 0.25
         gamma = 2.0
         batch_size = classifications.shape[0]
         classification_losses = []
         regression_losses = []
+        noun_losses = []
 
         anchor = anchors[0, :, :]
 
@@ -44,7 +47,19 @@ class FocalLoss(nn.Module):
             regression = regressions[j, :, :]
 
             bbox_annotation = annotations[j, :, :]
-            bbox_annotation = bbox_annotation[bbox_annotation[:, 4] != -1]
+            mask = bbox_annotation[:, 4] != -1
+            bbox_annotation = bbox_annotation[mask]
+
+            num_detections = sum(mask)
+
+            curr_nouns_dist = nouns_dist[j, mask, :]
+
+            gt = torch.zeros(num_detections, curr_nouns_dist.shape[1]).cuda()
+            gt[torch.arange(num_detections), bbox_annotation[:, -1].long()] = 1
+            gt[torch.arange(num_detections), bbox_annotation[:, -2].long()] = 1
+            gt[torch.arange(num_detections), bbox_annotation[:, -3].long()] = 1
+            noun_losses.append(F.binary_cross_entropy_with_logits(curr_nouns_dist, gt.float()))
+
 
             if bbox_annotation.shape[0] == 0:
                 regression_losses.append(torch.tensor(0).float().cuda())
@@ -139,6 +154,6 @@ class FocalLoss(nn.Module):
             else:
                 regression_losses.append(torch.tensor(0).float().cuda())
 
-        return torch.stack(classification_losses).mean(dim=0, keepdim=True), torch.stack(regression_losses).mean(dim=0, keepdim=True)
+        return torch.stack(classification_losses).mean(dim=0, keepdim=True), torch.stack(regression_losses).mean(dim=0, keepdim=True), torch.stack(noun_losses).mean(dim=0, keepdim=True)
 
     

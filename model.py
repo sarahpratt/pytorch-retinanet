@@ -158,12 +158,24 @@ class ClassificationModel(nn.Module):
         batch_size, width, height, channels = out1.shape
 
         out2 = out1.view(batch_size, width, height, self.num_anchors, self.num_classes)
+        y = x.permute(0,2,3,1)
+        y = y.unsqueeze(3).expand(batch_size, width, height, self.num_anchors, 256)
 
-        return out2.contiguous().view(x.shape[0], -1, self.num_classes)
+        return out2.contiguous().view(x.shape[0], -1, self.num_classes), y.contiguous().view(x.shape[0], -1, 256)
+
+
+
+class ClassifyLocalFeatures(nn.Module):
+    def __init__(self, vocab_size):
+        super(ClassifyLocalFeatures, self).__init__()
+        self.vocab_linear = nn.Linear(256, vocab_size)
+
+    def forward(self, local_features):
+        return self.vocab_linear(local_features)
 
 class ResNet(nn.Module):
 
-    def __init__(self, num_classes, block, layers):
+    def __init__(self, num_classes, num_nouns, block, layers):
         self.inplanes = 64
         super(ResNet, self).__init__()
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
@@ -182,16 +194,16 @@ class ResNet(nn.Module):
 
         self.fpn = PyramidFeatures(fpn_sizes[0], fpn_sizes[1], fpn_sizes[2])
 
-        self.regressionModel = RegressionModel(256)
-        self.classificationModel = ClassificationModel(256, num_classes=num_classes)
+        self.regressionModel = RegressionModel(256, num_anchors=5)
+        self.classificationModel = ClassificationModel(256, num_classes=num_classes, num_anchors=5)
 
         self.anchors = Anchors()
-
         self.regressBoxes = BBoxTransform()
-
         self.clipBoxes = ClipBoxes()
-        
         self.focalLoss = losses.FocalLoss()
+        self.training = True
+
+        self.classifier = ClassifyLocalFeatures(num_nouns)
                 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -240,7 +252,9 @@ class ResNet(nn.Module):
             img_batch, annotations = inputs
         else:
             img_batch = inputs
-            
+
+        batch_size = img_batch.shape[0]
+
         x = self.conv1(img_batch)
         x = self.bn1(x)
         x = self.relu(x)
@@ -252,52 +266,85 @@ class ResNet(nn.Module):
         x4 = self.layer4(x3)
 
         features = self.fpn([x2, x3, x4])
+        features.pop(0)
 
         regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
 
-        classification = torch.cat([self.classificationModel(feature) for feature in features], dim=1)
+        classif = []
+        features_reshapes = []
+        for ii in range(len(features)):
+            output = self.classificationModel(features[ii])
+            classif.append(output[0])
+            features_reshapes.append(output[1])
 
+        classification = torch.cat([c for c in classif], dim=1)
+        feature_reshape = torch.cat([c for c in features_reshapes], dim=1)
         anchors = self.anchors(img_batch)
 
         if self.training:
-            return self.focalLoss(classification, regression, anchors, annotations)
+
+            all_dist = []
+            for ii in range(annotations.shape[1]):
+                ddd = self.calc_iou(anchors[0, :, :], annotations[:, ii, :4])
+                rrr = ddd < 0.5
+                rrr = rrr.transpose(0, 1)
+                num_overlapping_anchors = rrr.sum(1).float()
+                num_overlapping_anchors = torch.clamp(num_overlapping_anchors, min=1)
+                feature_reshape[rrr] = 0
+                avg_features = feature_reshape.sum(1) / num_overlapping_anchors.unsqueeze(1).expand(
+                    num_overlapping_anchors.shape[0], 256)
+                dist = self.classifier(avg_features)
+                all_dist.append(dist)
+            nouns_dist = torch.stack([d for d in all_dist], dim=1)
+
+            return self.focalLoss(classification, regression, anchors, annotations, nouns_dist)
         else:
             transformed_anchors = self.regressBoxes(anchors, regression)
-            transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
+            transformed_anchors = self.clipBoxes(transformed_anchors, img_batch).squeeze()
 
             scores = torch.max(classification, dim=2, keepdim=True)[0]
 
-            scores_over_thresh = (scores>0.05)[0, :, 0]
+            top_boxes = torch.topk(scores, 100, dim = 1, sorted=True)
 
-            if scores_over_thresh.sum() == 0 and return_all_scores:
-                # no boxes to NMS, just return
-                return [torch.zeros(0), torch.zeros(0, 4)]
+            all_dist = []
 
+            boxes = transformed_anchors[torch.arange(batch_size).unsqueeze(1).expand(batch_size, 100), top_boxes[1].squeeze(),
+            :].squeeze()
 
-            if scores_over_thresh.sum() == 0:
-                # no boxes to NMS, just return
-                return [torch.zeros(0), torch.zeros(0), torch.zeros(0, 4)]
+            for ii in range(100):
+                ddd = self.calc_iou(anchors[0, :, :], boxes[:, ii, :])
+                rrr = ddd < 0.5
+                rrr = rrr.transpose(0, 1)
+                num_overlapping_anchors = rrr.sum(1).float()
+                num_overlapping_anchors = torch.clamp(num_overlapping_anchors, min=1)
+                feature_reshape[rrr] = 0
+                avg_features = feature_reshape.sum(1) / num_overlapping_anchors.unsqueeze(1).expand(
+                    num_overlapping_anchors.shape[0], 256)
+                #nouns = torch.argmax(self.classifier(avg_features), dim=1)
+                all_dist.append(self.classifier(avg_features))
 
-            classification = classification[:, scores_over_thresh, :]
-            transformed_anchors = transformed_anchors[:, scores_over_thresh, :]
-            scores = scores[:, scores_over_thresh, :]
+            pdb.set_trace()
 
-            transformed_anchors = transformed_anchors.cuda()
+            return boxes, all_dist
 
-            anchors_nms_idx = nms(torch.cat([transformed_anchors, scores], dim=2)[0, :, :], 0.5)
+    def calc_iou(self, a, b):
+        area = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
 
-            nms_scores, nms_class = classification[0, anchors_nms_idx, :].topk(3, dim=1)
+        iw = torch.min(torch.unsqueeze(a[:, 2], dim=1), b[:, 2]) - torch.max(torch.unsqueeze(a[:, 0], 1), b[:, 0])
+        ih = torch.min(torch.unsqueeze(a[:, 3], dim=1), b[:, 3]) - torch.max(torch.unsqueeze(a[:, 1], 1), b[:, 1])
 
-            if return_all_scores:
-                return [classification[0, anchors_nms_idx, :], transformed_anchors[0, anchors_nms_idx, :]]
+        iw = torch.clamp(iw, min=0)
+        ih = torch.clamp(ih, min=0)
 
-            nms_scores = torch.cat((nms_scores[:, 0], nms_scores[:, 1], nms_scores[:,2]))
-            nms_class = torch.cat((nms_class[:, 0], nms_class[:, 1], nms_class[:,2]))
-            x = transformed_anchors[0, anchors_nms_idx, :]
-            boxes = torch.cat((x, x, x))
+        ua = torch.unsqueeze((a[:, 2] - a[:, 0]) * (a[:, 3] - a[:, 1]), dim=1) + area - iw * ih
 
-            return [nms_scores, nms_class, boxes]
+        ua = torch.clamp(ua, min=1e-8)
 
+        intersection = iw * ih
+
+        IoU = intersection / ua
+
+        return IoU
 
 
 def resnet18(num_classes, pretrained=False, **kwargs):
@@ -322,12 +369,12 @@ def resnet34(num_classes, pretrained=False, **kwargs):
     return model
 
 
-def resnet50(num_classes, pretrained=False, **kwargs):
+def resnet50(num_classes, num_nouns, pretrained=False, **kwargs):
     """Constructs a ResNet-50 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs)
+    model = ResNet(num_classes, num_nouns, Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet50'], model_dir='.'), strict=False)
     return model
